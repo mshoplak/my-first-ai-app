@@ -48,3 +48,4 @@ async def mock_ai_translation(payload: TranslationRequest):
         "ai_output": processed_output,
         "api_key_configured": os.getenv("OPENAI_API_KEY") is not None
     }
+# Verified via VS Code terminal connection
