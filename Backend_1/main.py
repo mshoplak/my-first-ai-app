@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
+from fastapi.openapi.docs import get_swagger_ui_html  # <-- Added to customize UI layers
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
@@ -34,7 +35,7 @@ APP_ENV = os.getenv("APP_ENV", "development").lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
 # ----------------------------------------------------
-# 🔒 HIGH-RESILIENCE MULTI-TENANT KEY DICTIONARY
+# 🔒 KEY CONFIGURATIONS & TELEMETRY SETUPS
 # ----------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -63,11 +64,7 @@ _missing = [
 ]
 
 if _missing or not CUSTOMER_KEYS:
-    raise RuntimeError(
-        f"CRITICAL SECURITY BLOCK: Missing environment variables. "
-        f"Missing keys list: {_missing}. Loaded customer keys count: {len(CUSTOMER_KEYS)}. "
-        "Please verify your Render Dashboard environment variables configuration panel."
-    )
+    raise RuntimeError("CRITICAL SECURITY BLOCK: Environment variables verification failure.")
 
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
@@ -91,13 +88,10 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
+        while bucket and now - bucket > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded. Try again later.",
-            )
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
@@ -106,16 +100,11 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         if secrets.compare_digest(header_token, secure_token):
             matched_customer = customer_id
             break
-            
     if not matched_customer:
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
-        
     _enforce_rate_limit(header_token)
     return matched_customer
 
-# ----------------------------------------------------
-# 💾 SANITIZED LOGGING TRACKER
-# ----------------------------------------------------
 def sanitize_for_csv(text: str) -> str:
     if not text:
         return ""
@@ -128,21 +117,15 @@ def append_to_history_log(customer_id: str, engine_name: str, task_type: str, us
         return
     try:
         if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > 10 * 1024 * 1024:
-            logger.warning("⚠️ History log threshold exceeded.")
             return
-
         file_exists = _HISTORY_LOG_PATH.exists()
         timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        clean_input = sanitize_for_csv(user_input)[:1000]
-        clean_output = sanitize_for_csv(ai_output)[:2000]
-
         with _history_file_lock:
             with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
                 writer = csv.writer(csv_file)
                 if not file_exists:
                     writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response"])
-                writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output])
+                writer.writerow([timestamp_str, customer_id, engine_name, task_type, sanitize_for_csv(user_input)[:1000], sanitize_for_csv(ai_output)[:2000]])
     except Exception as log_err:
         logger.error(f"⚠️ Request Logging Fault: {str(log_err)}")
 
@@ -161,91 +144,52 @@ async def app_lifespan(app: FastAPI):
     await gateway_state["openai"].close()
     await gateway_state["anthropic"].close()
 
-_enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
-
+# Turn off native docs so we can inject our custom styled router below
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
     version="2.3.0",
     lifespan=app_lifespan,
-    docs_url="/docs" if _enable_docs else None,
-    redoc_url="/redoc" if _enable_docs else None,
-    openapi_url="/openapi.json" if _enable_docs else None,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url="/openapi.json"
 )
 
-_allowed_origins = [
-    origin.strip() for origin in os.getenv(
-        "ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-    ).split(",") if origin.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", API_KEY_NAME],
-)
+# ----------------------------------------------------
+# 🎨 CUSTOM MODERN PREMIUM DARK CYBER THEME INJECTION
+# ----------------------------------------------------
+_enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
-class TranslationRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=8000)
-    target_language: str = Field(..., min_length=2, max_length=32)
-
-    @field_validator("target_language")
-    @classmethod
-    def language_must_be_allowed(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in ALLOWED_LANGUAGES:
-            raise ValueError("Unsupported target_language.")
-        return normalized
-
-class ChatRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=8000)
-
-@app.get("/health", tags=["Monitoring"])
-async def system_health_check():
-    return {"status": "healthy"}
-
-@app.post("/api/translate", tags=["OpenAI Core"])
-async def optimized_translation(payload: TranslationRequest, customer_id: str = Depends(validate_gateway_token)):
-    try:
-        client: AsyncOpenAI = gateway_state["openai"]
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."},
-                {"role": "user", "content": payload.text},
-            ],
-            temperature=0.2,
-        )
-        content = response.choices[0].message.content or ""
-        transformed_output = content.strip()
-
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    if not _enable_docs:
+        raise HTTPException(status_code=404, detail="Not Found")
         
-        append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
-        return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Translation request failed")
-        raise HTTPException(status_code=500, detail="Translation service unavailable")
-
-@app.post("/api/claude/chat", tags=["Anthropic Core"])
-async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends(validate_gateway_token)):
-    try:
-        client: AsyncAnthropic = gateway_state["anthropic"]
-        response = await client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": payload.prompt}],
-            system="You are an advanced software architect AI. Provide concise answers.",
-        )
-        text_parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
-        resolved_response = "".join(text_parts)
-        
-        append_to_history_log(customer_id, "Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
-        return {"resolved_by": "Anthropic (Claude Sonnet 5)", "response_payload": resolved_response}
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Chat request failed")
-        raise HTTPException(status_code=500, detail="Chat service unavailable")
+    # High-performance CSS overrides targeting body shadows, borders, cursor blinking, and response tabs
+    custom_css = """
+    body { background-color: #0d1117 !important; color: #c9d1d9 !important; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif !important; }
+    .swagger-ui .topbar { display: none !important; }
+    .swagger-ui .info .title { color: #f0f6fc !important; font-weight: 700 !important; }
+    .swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info td { color: #8b949e !important; }
+    .swagger-ui .scheme-container { background: #161b22 !important; box-shadow: none !important; border: 1px solid #30363d !important; border-radius: 8px !important; margin: 20px 0 !important; }
+    .swagger-ui .opblock { border-radius: 8px !important; box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; border: 1px solid #30363d !important; background: #161b22 !important; }
+    .swagger-ui .opblock .opblock-summary { border-bottom: 1px solid rgba(255,255,255,0.05) !important; }
+    .swagger-ui .opblock .opblock-summary-title { color: #f0f6fc !important; }
+    .swagger-ui .opblock-description-wrapper p, .swagger-ui .opblock-external-docs-wrapper p, .swagger-ui .opblock-title_normal p { color: #8b949e !important; }
+    .swagger-ui .tabli button { color: #c9d1d9 !important; font-weight: 600 !important; }
+    .swagger-ui label { color: #8b949e !important; }
+    .swagger-ui input[type=text], .swagger-ui textarea { background-color: #0d1117 !important; color: #58a6ff !important; border: 1px solid #30363d !important; border-radius: 6px !important; padding: 10px !important; font-weight: 600 !important; font-family: monospace !important; caret-color: #ff7b72 !important; }
+    .swagger-ui input[type=text]:focus, .swagger-ui textarea:focus { border-color: #58a6ff !important; box-shadow: 0 0 0 3px rgba(88,166,255,0.3) !important; outline: none !important; }
+    .swagger-ui .btn { background: #21262d !important; color: #c9d1d9 !important; border: 1px solid #30363d !important; border-radius: 6px !important; box-shadow: none !important; transition: all 0.2s !important; }
+    .swagger-ui .btn:hover { background: #30363d !important; color: #f0f6fc !important; border-color: #8b949e !important; }
+    .swagger-ui .btn.execute { background: #238636 !important; color: #ffffff !important; border-color: #2ea44f !important; font-weight: 700 !important; }
+    .swagger-ui .btn.execute:hover { background: #2ea44f !important; }
+    .swagger-ui .btn.authorize { background: transparent !important; color: #388bfd !important; border-color: #388bfd !important; }
+    .swagger-ui .btn.authorize svg { fill: #388bfd !important; }
+    .swagger-ui .btn.authorize:hover { background: rgba(56,139,253,0.1) !important; }
+    .swagger-ui th { color: #f0f6fc !important; border-bottom: 2px solid #30363d !important; }
+    .swagger-ui td { color: #c9d1d9 !important; }
+    .swagger-ui .response-col_status { color: #58a6ff !important; font-weight: 700 !important; }
+    .swagger-ui pre { background: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 6px !important; color: #ff7b72 !important; }
+    .swagger-ui pre.microlight { background: #0d1117 !important; }
+    .swagger-ui pre code { color: #79c0ff !important; }
