@@ -46,20 +46,24 @@ APP_ENV = os.getenv("APP_ENV", "development").lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
 # ----------------------------------------------------
-# 🔒 FIXED CRITICAL: MULTI-TENANT KEY DICTIONARY
+# 🔒 HIGH-RESILIENCE MULTI-TENANT KEY DICTIONARY
 # ----------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-# 1. Parse and build your customer key map database dynamically
 CUSTOMER_KEYS: dict[str, str] = {}
-raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "")
+
+# Read the raw string and strip any accidental wrapping quotation marks
+raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
 if raw_keys_string:
-    # Parses strings format: "key1:customerA,key2:customerB"
+    # Split individual key-pairs safely
     for pair in raw_keys_string.split(","):
-        if ":" in pair:
-            token, client_name = pair.split(":", 1)
+        # Strip trailing or leading spaces around pairs
+        clean_pair = pair.strip()
+        if ":" in clean_pair:
+            token, client_name = clean_pair.split(":", 1)
+            # Strip spaces around individual tokens and names
             CUSTOMER_KEYS[token.strip()] = client_name.strip()
 
 _missing = [
@@ -68,11 +72,14 @@ _missing = [
         ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
     ) if not value
 ]
+
+# Hard enforcement check
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
         "CRITICAL SECURITY BLOCK: Missing environment variables or no valid customer tokens configured. "
         "Please build your CUSTOMER_GATEWAY_KEYS list inside your master parent .env file."
     )
+
 
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
