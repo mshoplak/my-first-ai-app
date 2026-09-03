@@ -17,33 +17,20 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
-# 🌍 CLOUD-NATIVE RESILIENT ENVIRONMENT RESOLUTION
+# 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
-# 1. First, attempt to load local file variables (only applies to your laptop)
-_LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
-_LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
+# Check if running natively on Render (Render injects a default PORT or RENDER variable)
+IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
-if _LOCAL_REPO_PARENT.exists():
-    load_dotenv(dotenv_path=_LOCAL_REPO_PARENT)
-elif _LOCAL_CURRENT_CWD.exists():
-    load_dotenv(dotenv_path=_LOCAL_CURRENT_CWD)
-
-# 2. If running on Render, load_dotenv is bypassed because variables 
-# are pulled directly from Render's native cloud environment memory OS!
-APP_ENV = os.getenv("APP_ENV", "development").lower()
-IS_PRODUCTION = APP_ENV in {"production", "prod"}
-
-
-
-
-_HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("expat-gateway")
-
-APP_ENV = os.getenv("APP_ENV", "development").lower()
-IS_PRODUCTION = APP_ENV in {"production", "prod"}
+if not IS_ON_RENDER:
+    # We are on your local laptop: load variables from your parent .env file
+    _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
+    _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
+    
+    if _LOCAL_REPO_PARENT.exists():
+        load_dotenv(dotenv_path=_LOCAL_REPO_PARENT)
+    elif _LOCAL_CURRENT_CWD.exists():
+        load_dotenv(dotenv_path=_LOCAL_CURRENT_CWD)
 
 # ----------------------------------------------------
 # 🔒 HIGH-RESILIENCE MULTI-TENANT KEY DICTIONARY
@@ -53,17 +40,14 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 CUSTOMER_KEYS: dict[str, str] = {}
 
-# Read the raw string and strip any accidental wrapping quotation marks
+# Read the raw string directly from OS memory environment variables
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
 if raw_keys_string:
-    # Split individual key-pairs safely
     for pair in raw_keys_string.split(","):
-        # Strip trailing or leading spaces around pairs
         clean_pair = pair.strip()
         if ":" in clean_pair:
             token, client_name = clean_pair.split(":", 1)
-            # Strip spaces around individual tokens and names
             CUSTOMER_KEYS[token.strip()] = client_name.strip()
 
 _missing = [
@@ -76,8 +60,9 @@ _missing = [
 # Hard enforcement check
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
-        "CRITICAL SECURITY BLOCK: Missing environment variables or no valid customer tokens configured. "
-        "Please build your CUSTOMER_GATEWAY_KEYS list inside your master parent .env file."
+        f"CRITICAL SECURITY BLOCK: Missing environment variables. "
+        f"Missing keys list: {_missing}. Loaded customer keys count: {len(CUSTOMER_KEYS)}. "
+        "Please verify your Render Dashboard environment variables configuration panel."
     )
 
 
