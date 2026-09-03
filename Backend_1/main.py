@@ -242,7 +242,7 @@ async def custom_swagger_ui_html():
     <script src="https://jsdelivr.net"></script>
     <script>
         const ui = SwaggerUIBundle({{
-            url: './openapi.json', 
+            url: '/openapi.json', 
             dom_id: '#swagger-ui',
             presets: [
                 SwaggerUIBundle.presets.apis
