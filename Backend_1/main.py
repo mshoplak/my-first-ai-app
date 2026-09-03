@@ -11,7 +11,7 @@ from threading import Lock
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
-from fastapi.middleware.cors import CORSMiddleware  # Verified active mapping module
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
@@ -19,9 +19,11 @@ from pydantic import BaseModel, Field, field_validator
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
+# Dynamically detects if running natively on Render's cloud platform architecture
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
+    # Local laptop fallback logic: parse environment keys relative to your parent folder execution layer
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -40,7 +42,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()  # Prevents thread write collisions
+_history_file_lock = Lock()  # Prevents multithreaded write collisions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
@@ -63,7 +65,7 @@ _missing = [
     ) if not value
 ]
 
-# Strict failure-closed initialization security guard
+# Strict fail-closed initialization security guard
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
         f"CRITICAL SECURITY BLOCK: Missing environment configurations. "
@@ -133,6 +135,7 @@ def append_to_history_log(customer_id: str, engine_name: str, task_type: str, us
     if os.getenv("ENABLE_HISTORY_LOGGING", "false").lower() not in ("true", "1"):
         return
     try:
+        # MITIGATED DISK EXHAUSTION: Enforce a safe cap on local logging size limits (10MB Cap)
         if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > 10 * 1024 * 1024:
             logger.warning("⚠️ History log threshold exceeded.")
             return
@@ -168,28 +171,10 @@ async def app_lifespan(app: FastAPI):
     await gateway_state["anthropic"].close()
 
 # ----------------------------------------------------
-# 🎨 HIGH-RESILIENCE NATIVE SWAGGER ASSET OVERRIDES 
+# 🚀 NATIVE APP MOUNTING & INITIALIZATION
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
-# High-performance CSS overrides targeting body backgrounds and parameter layouts directly
-_SWAGGER_DARK_CSS = """
-body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
-.swagger-ui .topbar { display: none !important; }
-.swagger-ui .info .title { color: #f0f6fc !important; font-weight: 700 !important; }
-.swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info td { color: #8b949e !important; }
-.swagger-ui .scheme-container { background: #161b22 !important; border: 1px solid #30363d !important; border-radius: 8px !important; }
-.swagger-ui .opblock { border-radius: 8px !important; border: 1px solid #30363d !important; background: #161b22 !important; box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
-.swagger-ui .opblock .opblock-summary-title { color: #f0f6fc !important; }
-.swagger-ui input[type=text], .swagger-ui textarea { background-color: #0d1117 !important; color: #58a6ff !important; border: 1px solid #30363d !important; border-radius: 6px !important; padding: 10px !important; caret-color: #ff7b72 !important; font-weight: 600 !important; }
-.swagger-ui .btn { background: #21262d !important; color: #c9d1d9 !important; border: 1px solid #30363d !important; border-radius: 6px !important; }
-.swagger-ui .btn.execute { background: #238636 !important; color: #ffffff !important; border-color: #2ea44f !important; font-weight: 700 !important; }
-.swagger-ui pre { background: #0d1117 !important; border: 1px solid #30363d !important; color: #79c0ff !important; }
-.swagger-ui .modal-ux { background-color: #161b22 !important; border: 1px solid #30363d !important; border-radius: 12px !important; }
-.swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
-"""
-
-# Native application instance utilizing fixed properties parameters to avoid routing collisions
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
@@ -197,17 +182,10 @@ app = FastAPI(
     lifespan=app_lifespan,
     docs_url="/docs" if _enable_docs else None,
     redoc_url="/redoc" if _enable_docs else None,
-    openapi_url="/openapi.json" if _enable_docs else None,
-    # FIXED: We group deepLinking and custom styles together directly inside swagger_ui_parameters to ensure execution priority
-    swagger_ui_parameters={
-        "deepLinking": True,
-        "customCss": _SWAGGER_DARK_CSS
-    },
-    swagger_ui_js_url="https://jsdelivr.net",
-    swagger_ui_css_url="https://jsdelivr.net"
+    openapi_url="/openapi.json" if _enable_docs else None
 )
 
-# Active origin mapping sequence that explicitly satisfies your CORSMiddleware properties layout
+# Active origin mapping sequence that satisfies your CORSMiddleware layout
 _allowed_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -274,7 +252,7 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model="claude-sonnet-5",
+            model="claude-3-5-sonnet-20240620",
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
