@@ -184,28 +184,27 @@ body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
 """
 
-# Initialize app natively with docs disabled at the root level configuration layer
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
     version="2.3.0",
     lifespan=app_lifespan,
-    docs_url=None,      # Disable native route so our custom function below overrides it
+    docs_url=None,      
     redoc_url=None,
     openapi_url="/openapi.json" if _enable_docs else None
 )
 
-# FIXED CORE GATEWAY LOOKUP: Intercepts browser traffic and actively applies style sheets
+# FIXED: Utilizing the app properties mapping object variable path to clear 500 exceptions
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
-    if not _enable_docs:
+    if not _enable_docs or not app.openapi_url:
         raise HTTPException(status_code=404, detail="Not Found")
     return get_swagger_ui_html(
-        openapi_url="/openapi.json",  # Secure fallback path reference mapping
+        openapi_url=app.openapi_url,  # Direct structural property validation check
         title=app.title + " - Premium Dark",
         oauth2_redirect_url=app.oauth2_redirect_url,
         swagger_ui_parameters={"deepLinking": True},
-        swagger_custom_css=_SWAGGER_DARK_CSS  # Injecting raw text styles explicitly into the layout parameters
+        swagger_custom_css=_SWAGGER_DARK_CSS
     )
 
 _allowed_origins = [
