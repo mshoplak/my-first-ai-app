@@ -20,11 +20,9 @@ from pydantic import BaseModel, Field, field_validator
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
-# Dynamically checks if running natively on Render's cloud platform architecture
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
-    # Local laptop fallback logic: parse environment keys relative to your parent folder execution layer
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -37,18 +35,21 @@ APP_ENV = os.getenv("APP_ENV", "development").lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
 # ----------------------------------------------------
-# 🔒 HIGH-RESILIENCE MULTI-TENANT KEY DICTIONARY
+# 🔒 SECURE MULTI-TENANT VARIABLE MAPPINGS
 # ----------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-app-logs")
+ENABLE_PINECONE_LOGGING = os.getenv("ENABLE_PINECONE_LOGGING", "true").lower() in ("true", "1")
+ANTHROPIC_MODEL_NAME = os.getenv("ANTHROPIC_MODEL_NAME", "claude-3-5-sonnet-20241022")
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()  # Prevents thread write collisions
+_history_file_lock = Lock()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
 
-# Parse and build your customer key map database dynamically
 CUSTOMER_KEYS: dict[str, str] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
@@ -66,18 +67,12 @@ _missing = [
     ) if not value
 ]
 
-# Strict failure-closed initialization security guard
 if _missing or not CUSTOMER_KEYS:
-    raise RuntimeError(
-        f"CRITICAL SECURITY BLOCK: Missing environment configurations. "
-        f"Missing tracking keys: {_missing}. Loaded customer keys count: {len(CUSTOMER_KEYS)}. "
-        "Please verify your system's Environment Variables properties."
-    )
+    raise RuntimeError(f"CRITICAL SECURITY BLOCK: Missing environment keys: {_missing}")
 
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# Sliding window rate limiter configurations
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
@@ -97,13 +92,11 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and (now - bucket) > RATE_LIMIT_WINDOW_SEC:
+        # FIX SECURED: Isolated array index position 0 to completely clear out subtraction exceptions
+        while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded. Try again later.",
-            )
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
@@ -121,12 +114,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-app-logs")
-ENABLE_PINECONE_LOGGING = os.getenv("ENABLE_PINECONE_LOGGING", "true").lower() in ("true", "1")
-
-ANTHROPIC_MODEL_NAME = os.getenv("ANTHROPIC_MODEL_NAME", "claude-3-5-sonnet-20241022")
-
 def sanitize_for_csv(text: str) -> str:
     if not text:
         return ""
@@ -170,7 +157,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                     model="text-embedding-3-large",
                     dimensions=2048
                 )
-                vector_values = embedding_response.data.embedding
+                vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -281,7 +268,7 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
             ],
             temperature=0.2,
         )
-        content = response.choices.message.content or ""
+        content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
@@ -302,7 +289,6 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        # HARD-FIXED CONTENT PARSER LAYER: Explicitly brackets position 0 text block array items to clear the list error flawlessly
         resolved_response = response.content[0].text.strip()
         
         await append_to_history_log(customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response)
