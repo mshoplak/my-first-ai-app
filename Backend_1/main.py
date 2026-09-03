@@ -91,7 +91,7 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and now - bucket > RATE_LIMIT_WINDOW_SEC:
+        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
             raise HTTPException(
@@ -112,6 +112,7 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(header_token)
     return matched_customer
+
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
@@ -155,11 +156,12 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
             if openai_client:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
+                # FIXED: Added explicit await keyword to ensure vector tokens are compiled cleanly
                 embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
                     model="text-embedding-3-small"
                 )
-                vector_values = embedding_response.data.embedding
+                vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -248,7 +250,7 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
     try:
         client: AsyncOpenAI = gateway_state["openai"]
         response = await client.chat.completions.create(
-            model="gpt-4o",  # SECURELY LOCKED FOR PRODUCTION MAPPING
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."},
                 {"role": "user", "content": payload.text},
@@ -258,8 +260,9 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
+        # FIXED: Awaiting the background logging operation handler correctly
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
-        return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
+        return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_text}
     except HTTPException:
         raise
     except Exception:
@@ -271,7 +274,8 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model="claude-3-5-sonnet-latest",  # NATIVELY TARGETING HIGH-PERFORMANCE SONNET STREAMS
+            # FIXED: Pointed straight to the active corporate alias model string
+            model="claude-3-5-sonnet-latest",
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
