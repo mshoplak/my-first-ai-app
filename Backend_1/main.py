@@ -17,24 +17,22 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
-# 🌍 ENTERPRISE RESILIENT ENVIRONMENT FILE RESOLUTION
+# 🌍 CLOUD-NATIVE RESILIENT ENVIRONMENT RESOLUTION
 # ----------------------------------------------------
-# 1. Check Render's exact absolute cloud file system mount path first
-_RENDER_ABSOLUTE_PATH = Path("/opt/render/project/src/.env")
-
-# 2. Check local relative development workspace paths
+# 1. First, attempt to load local file variables (only applies to your laptop)
 _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
 _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
 
-if _RENDER_ABSOLUTE_PATH.exists():
-    _ENV_PATH = _RENDER_ABSOLUTE_PATH
-elif _LOCAL_REPO_PARENT.exists():
-    _ENV_PATH = _LOCAL_REPO_PARENT
-else:
-    _ENV_PATH = _LOCAL_CURRENT_CWD
+if _LOCAL_REPO_PARENT.exists():
+    load_dotenv(dotenv_path=_LOCAL_REPO_PARENT)
+elif _LOCAL_CURRENT_CWD.exists():
+    load_dotenv(dotenv_path=_LOCAL_CURRENT_CWD)
 
-# Load variables into system memory using the verified absolute path reference
-load_dotenv(dotenv_path=_ENV_PATH)
+# 2. If running on Render, load_dotenv is bypassed because variables 
+# are pulled directly from Render's native cloud environment memory OS!
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+IS_PRODUCTION = APP_ENV in {"production", "prod"}
+
 
 
 
