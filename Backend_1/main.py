@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
+from pinecone import Pinecone
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
