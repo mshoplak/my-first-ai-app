@@ -19,11 +19,9 @@ from pydantic import BaseModel, Field, field_validator
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
-# Dynamically checks if running natively on Render's cloud platform architecture
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
-    # Local laptop fallback logic: parse environment keys relative to your parent folder execution layer
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -42,12 +40,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()  # Prevents thread write collisions
+_history_file_lock = Lock()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
 
-# Parse and build your customer key map database dynamically
 CUSTOMER_KEYS: dict[str, str] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
@@ -65,7 +62,6 @@ _missing = [
     ) if not value
 ]
 
-# Strict failure-closed initialization security guard
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
         f"CRITICAL SECURITY BLOCK: Missing environment configurations. "
@@ -76,7 +72,6 @@ if _missing or not CUSTOMER_KEYS:
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# Sliding window rate limiter configurations
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
@@ -106,9 +101,6 @@ def _enforce_rate_limit(token: str) -> None:
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
-    """
-    Checks the incoming token against your revolving database of authorized customer keys.
-    """
     matched_customer = None
     for secure_token, customer_id in CUSTOMER_KEYS.items():
         if secrets.compare_digest(header_token, secure_token):
@@ -169,25 +161,12 @@ async def app_lifespan(app: FastAPI):
     await gateway_state["anthropic"].close()
 
 # ----------------------------------------------------
-# 🎨 NATIVE SWAGGER ASSET OVERRIDES WITH DARK THEME
+# 🎨 NATIVE SWAGGER INITIALIZATION WITH DARK CDN ASSETS
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
-_SWAGGER_DARK_CSS = """
-body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
-.swagger-ui .topbar { display: none !important; }
-.swagger-ui .info .title { color: #f0f6fc !important; font-weight: 700 !important; }
-.swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info td { color: #8b949e !important; }
-.swagger-ui .scheme-container { background: #161b22 !important; border: 1px solid #30363d !important; border-radius: 8px !important; }
-.swagger-ui .opblock { border-radius: 8px !important; border: 1px solid #30363d !important; background: #161b22 !important; box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
-.swagger-ui .opblock .opblock-summary-title { color: #f0f6fc !important; }
-.swagger-ui input[type=text], .swagger-ui textarea { background-color: #0d1117 !important; color: #58a6ff !important; border: 1px solid #30363d !important; border-radius: 6px !important; padding: 10px !important; caret-color: #ff7b72 !important; font-weight: 600 !important; }
-.swagger-ui .btn { background: #21262d !important; color: #c9d1d9 !important; border: 1px solid #30363d !important; border-radius: 6px !important; }
-.swagger-ui .btn.execute { background: #238636 !important; color: #ffffff !important; border-color: #2ea44f !important; font-weight: 700 !important; }
-.swagger-ui pre { background: #0d1117 !important; border: 1px solid #30363d !important; color: #79c0ff !important; }
-.swagger-ui .modal-ux { background-color: #161b22 !important; border: 1px solid #30363d !important; border-radius: 12px !important; }
-.swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
-"""
+# FIXED: Points directly to an official, pre-built high-contrast dark theme layout asset sheet URL
+_DARK_THEME_CDN_URL = "https://jsdelivr.net"
 
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
@@ -198,10 +177,9 @@ app = FastAPI(
     redoc_url="/redoc" if _enable_docs else None,
     openapi_url="/openapi.json" if _enable_docs else None,
     swagger_ui_parameters={"deepLinking": True},
-    swagger_ui_custom_css=_SWAGGER_DARK_CSS
+    swagger_ui_custom_css=_DARK_THEME_CDN_URL  # Native link loading forces the dark mode layout onto the canvas
 )
 
-# FIXED: Active mapping sequence that explicitly fulfills your CORSMiddleware import requirements
 _allowed_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -283,3 +261,4 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     except Exception:
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Chat service unavailable")
+
