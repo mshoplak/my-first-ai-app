@@ -165,7 +165,6 @@ async def custom_swagger_ui_html():
     if not _enable_docs:
         raise HTTPException(status_code=404, detail="Not Found")
         
-    # High-performance CSS overrides targeting body shadows, borders, cursor blinking, and response tabs
     custom_css = """
     body { background-color: #0d1117 !important; color: #c9d1d9 !important; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif !important; }
     .swagger-ui .topbar { display: none !important; }
@@ -193,3 +192,19 @@ async def custom_swagger_ui_html():
     .swagger-ui pre { background: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 6px !important; color: #ff7b72 !important; }
     .swagger-ui pre.microlight { background: #0d1117 !important; }
     .swagger-ui pre code { color: #79c0ff !important; }
+    .swagger-ui .opblock.opblock-post { background: #161b22 !important; border-color: #388bfd !important; }
+    .swagger-ui .opblock.opblock-post .opblock-summary { background: rgba(56,139,253,0.05) !important; }
+    .swagger-ui .opblock.opblock-post .opblock-summary-method { background: #388bfd !important; color: #ffffff !important; border-radius: 4px !important; }
+    .swagger-ui .opblock.opblock-get { background: #161b22 !important; border-color: #3f6e51 !important; }
+    .swagger-ui .opblock.opblock-get .opblock-summary { background: rgba(46,164,79,0.05) !important; }
+    .swagger-ui .opblock.opblock-get .opblock-summary-method { background: #2ea44f !important; color: #ffffff !important; border-radius: 4px !important; }
+    .swagger-ui .modal-ux { background-color: #161b22 !important; border: 1px solid #30363d !important; border-radius: 12px !important; box-shadow: 0 20px 40px rgba(0,0,0,0.5) !important; }
+    .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
+    .swagger-ui .modal-ux-content h4 { color: #8b949e !important; }
+    """
+    
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=app.title + " - Premium Dark",
+        swagger_custom_css=custom_css
+    )
