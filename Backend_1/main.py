@@ -217,8 +217,9 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
             ],
             temperature=0.2,
         )
-        content = response.choices.message.content or ""
+        content = response.choices[0].message.content or ""
         transformed_output = content.strip()
+
         
         append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
