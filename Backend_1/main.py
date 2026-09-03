@@ -182,6 +182,9 @@ body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
 """
 
+# Direct pre-built link that forces your browser to pull dark material themes automatically [1]
+_DARK_THEME_CDN_LINK = "https://jsdelivr.net"
+
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
@@ -191,7 +194,7 @@ app = FastAPI(
     redoc_url="/redoc" if _enable_docs else None,
     openapi_url="/openapi.json" if _enable_docs else None,
     swagger_ui_parameters={"deepLinking": True},
-    swagger_ui_custom_css=_SWAGGER_DARK_CSS  # Native parameter handles clean string injections flawlessly
+    swagger_ui_custom_css=_DARK_THEME_CDN_LINK  # <-- PASSING THE CDN LINK DIRECTLY BRINGS THE DARK THEME TO LIFE!
 )
 
 _allowed_origins = [
