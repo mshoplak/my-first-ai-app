@@ -85,10 +85,20 @@ def _enforce_rate_limit(token: str) -> None:
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
+    """
+    Firewall filter that automatically unlocks for you during local development, 
+    but strictly enforces security when hosted live in production.
+    """
+    # If your master .env file says APP_ENV=development, bypass the lock for easy testing!
+    if not IS_PRODUCTION:
+        return "development_bypass_token"
+        
+    # Strict enforcement rules applied exclusively on the live production cloud
     if not secrets.compare_digest(header_token, GATEWAY_SECRET):
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
     _enforce_rate_limit(header_token)
     return header_token
+
 
 def append_to_history_log(engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
     """
