@@ -16,3 +16,6 @@ venv/
 .cursor/
 .vscode/
 
+# Exclude raw transactional tracking sheets from cloud exposure
+history.csv
+Backend_1/history.csv
