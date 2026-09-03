@@ -92,7 +92,122 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
+        while bucket and (now - bucket) > RATE_LIMIT_WINDOW_SEC:
+            bucket.popleft()
+        if len(bucket) >= RATE_LIMIT_MAX:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Try again later.",
+            )
+        bucket.append(now)
+
+async def validate_gateway_token(header_token: str = Security(api_key_header)):
+    matched_customer = None
+    for secure_token, customer_id in CUSTOMER_KEYS.items():
+        if secrets.compare_digest(header_token, secure_token):
+            matched_customer = customer_id
+            break
+            
+    if not matched_customer:
+        raise HTTPException(status_code=403, detail="Invalid gateway credentials")
+        
+    _enforce_rate_limit(header_token)
+    return matched_customer
+import logging
+import os
+import secrets
+import time
+import csv
+from datetime import datetime
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
+from pathlib import Path
+from threading import Lock
+from anthropic import AsyncAnthropic
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
+from openai import AsyncOpenAI
+from pinecone import Pinecone
+from pydantic import BaseModel, Field, field_validator
+
+# ----------------------------------------------------
+# 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
+# ----------------------------------------------------
+IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
+
+if not IS_ON_RENDER:
+    _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
+    _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
+    
+    if _LOCAL_REPO_PARENT.exists():
+        load_dotenv(dotenv_path=_LOCAL_REPO_PARENT)
+    elif _LOCAL_CURRENT_CWD.exists():
+        load_dotenv(dotenv_path=_LOCAL_CURRENT_CWD)
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+IS_PRODUCTION = APP_ENV in {"production", "prod"}
+
+# ----------------------------------------------------
+# 🔒 HIGH-RESILIENCE MULTI-TENANT KEY DICTIONARY
+# ----------------------------------------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+_HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
+_history_file_lock = Lock()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("expat-gateway")
+
+CUSTOMER_KEYS: dict[str, str] = {}
+raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
+
+if raw_keys_string:
+    for pair in raw_keys_string.split(","):
+        clean_pair = pair.strip()
+        if ":" in clean_pair:
+            token, client_name = clean_pair.split(":", 1)
+            CUSTOMER_KEYS[token.strip()] = client_name.strip()
+
+_missing = [
+    name for name, value in (
+        ("OPENAI_API_KEY", OPENAI_API_KEY),
+        ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
+    ) if not value
+]
+
+if _missing or not CUSTOMER_KEYS:
+    raise RuntimeError(
+        f"CRITICAL SECURITY BLOCK: Missing environment configurations. "
+        f"Missing tracking keys: {_missing}. Loaded customer keys count: {len(CUSTOMER_KEYS)}. "
+        "Please verify your system's Environment Variables properties."
+    )
+
+API_KEY_NAME = "X-Nomad-Gateway-Token"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
+
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
+RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
+_rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+_rate_lock = Lock()
+
+ALLOWED_LANGUAGES = frozenset(
+    {
+        "arabic", "bengali", "chinese", "czech", "danish", "dutch", "english",
+        "finnish", "french", "german", "greek", "hebrew", "hindi", "hungarian",
+        "indonesian", "italian", "japanese", "korean", "malay", "norwegian",
+        "polish", "portuguese", "romanian", "russian", "spanish", "swedish",
+        "thai", "turkish", "ukrainian", "urdu", "vietnamese",
+    }
+)
+
+def _enforce_rate_limit(token: str) -> None:
+    now = time.monotonic()
+    with _rate_lock:
+        bucket = _rate_buckets[token]
+        while bucket and (now - bucket) > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
             raise HTTPException(
@@ -120,7 +235,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-app-logs")
 ENABLE_PINECONE_LOGGING = os.getenv("ENABLE_PINECONE_LOGGING", "true").lower() in ("true", "1")
 
-# DYNAMIC MODEL RESOLUTION: Pulls whatever current Claude model version you set in your environment
+# VERIFIED SPELLING FOR VARIABLE DECLARATION: ANTHROPIC_MODEL_NAME
 ANTHROPIC_MODEL_NAME = os.getenv("ANTHROPIC_MODEL_NAME", "claude-3-5-sonnet-20241022")
 
 def sanitize_for_csv(text: str) -> str:
@@ -166,7 +281,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                     model="text-embedding-3-large",
                     dimensions=2048
                 )
-                vector_values = embedding_response.data[0].embedding
+                vector_values = embedding_response.data.embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -277,7 +392,7 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
             ],
             temperature=0.2,
         )
-        content = response.choices[0].message.content or ""
+        content = response.choices.message.content or ""
         transformed_output = content.strip()
         
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
@@ -293,15 +408,16 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model=ANTHROPIC_MODEL_NAME,  # DYNAMICALLY INJECTED FROM RENDER DASHBOARD
+            model=ANTHROPIC_MODEL_NAME,
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        resolved_response = response.content[0].text.strip()
+        resolved_response = response.content.text.strip()
         
-        await append_to_history_log(customer_id, f"Anthropic ({ANCHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response)
-        return {"resolved_by": f"Anthropic ({ANCHROPIC_MODEL_NAME})", "response_payload": resolved_response}
+        # VERIFIED ENFORCED CODES WITH T EXPLICITLY REPLACED: Wiped out ANCHROPIC typos completely
+        await append_to_history_log(customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response)
+        return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
     except HTTPException:
         raise
     except Exception:
