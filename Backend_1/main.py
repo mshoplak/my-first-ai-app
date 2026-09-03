@@ -120,6 +120,9 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-app-logs")
 ENABLE_PINECONE_LOGGING = os.getenv("ENABLE_PINECONE_LOGGING", "true").lower() in ("true", "1")
 
+# DYNAMIC MODEL RESOLUTION: Pulls whatever current Claude model version you set in your environment
+ANTHROPIC_MODEL_NAME = os.getenv("ANTHROPIC_MODEL_NAME", "claude-3-5-sonnet-20241022")
+
 def sanitize_for_csv(text: str) -> str:
     if not text:
         return ""
@@ -290,16 +293,15 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model="claude-3-5-sonnet-latest",  # HIGH-PRIORITY NATIVE SDK SELECTION STRING
+            model=ANTHROPIC_MODEL_NAME,  # DYNAMICALLY INJECTED FROM RENDER DASHBOARD
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        # NATIVE SDK ACCESSOR WORKAROUND: Extract text cleanly out of position 0 content block schemas
         resolved_response = response.content[0].text.strip()
         
-        await append_to_history_log(customer_id, "Anthropic (Claude 3.5 Sonnet)", "Architect Chat Prompt", payload.prompt, resolved_response)
-        return {"resolved_by": "Anthropic (Claude 3.5 Sonnet)", "response_payload": resolved_response}
+        await append_to_history_log(customer_id, f"Anthropic ({ANCHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response)
+        return {"resolved_by": f"Anthropic ({ANCHROPIC_MODEL_NAME})", "response_payload": resolved_response}
     except HTTPException:
         raise
     except Exception:
