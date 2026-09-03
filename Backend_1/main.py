@@ -92,7 +92,8 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and now - bucket > RATE_LIMIT_WINDOW_SEC:
+        # FIXED: Added [0] parameter constraints precisely to pull the individual oldest timestamp integer element
+        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
             raise HTTPException(
@@ -113,6 +114,7 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(header_token)
     return matched_customer
+
 
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
@@ -275,7 +277,6 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
             ],
             temperature=0.2,
         )
-        # FIXED LIST INDEXING CHECK: Adding bracket selection [0] to extract data out of the array format
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
