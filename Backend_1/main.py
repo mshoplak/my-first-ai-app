@@ -20,9 +20,8 @@ from pydantic import BaseModel, Field, field_validator
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 
-# Establish local pathing layouts for our persistent records
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()  # Prevents multi-threaded write collisions
+_history_file_lock = Lock()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
@@ -31,23 +30,32 @@ APP_ENV = os.getenv("APP_ENV", "development").lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
 # ----------------------------------------------------
-# 🔒 FIXED CRITICAL/HIGH: FAIL-CLOSED ENFORCEMENT
+# 🔒 FIXED CRITICAL: MULTI-TENANT KEY DICTIONARY
 # ----------------------------------------------------
-GATEWAY_SECRET = os.getenv("GATEWAY_SECRET_PASSPHRASE")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# 1. Parse and build your customer key map database dynamically
+CUSTOMER_KEYS: dict[str, str] = {}
+raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "")
+
+if raw_keys_string:
+    # Parses strings format: "key1:customerA,key2:customerB"
+    for pair in raw_keys_string.split(","):
+        if ":" in pair:
+            token, client_name = pair.split(":", 1)
+            CUSTOMER_KEYS[token.strip()] = client_name.strip()
+
 _missing = [
     name for name, value in (
-        ("GATEWAY_SECRET_PASSPHRASE", GATEWAY_SECRET),
         ("OPENAI_API_KEY", OPENAI_API_KEY),
         ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
     ) if not value
 ]
-if _missing or GATEWAY_SECRET == "nomad_secure_token_2026":
+if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
-        "CRITICAL SECURITY BLOCK: Missing or insecure defaults for environment variables. "
-        "Please rotate GATEWAY_SECRET_PASSPHRASE to a strong, private random key string."
+        "CRITICAL SECURITY BLOCK: Missing environment variables or no valid customer tokens configured. "
+        "Please build your CUSTOMER_GATEWAY_KEYS list inside your master parent .env file."
     )
 
 API_KEY_NAME = "X-Nomad-Gateway-Token"
@@ -82,57 +90,58 @@ def _enforce_rate_limit(token: str) -> None:
             )
         bucket.append(now)
 
-# 🛠️ FIXED CRITICAL DEVELOPMENT BYPASS: Authorization is now MANDATORY everywhere
+# 🛠️ MULTI-TENANT VERIFICATION GATEWAY
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
     """
-    Enforces absolute cryptographically secure key checking across all environments.
+    Checks the incoming token against your revolving database of authorized customer keys.
     """
-    if not secrets.compare_digest(header_token, GATEWAY_SECRET):
+    matched_customer = None
+    
+    # Securely iterate through your revolving key dictionary
+    for secure_token, customer_id in CUSTOMER_KEYS.items():
+        if secrets.compare_digest(header_token, secure_token):
+            matched_customer = customer_id
+            break
+            
+    if not matched_customer:
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
+        
     _enforce_rate_limit(header_token)
-    return header_token
+    
+    # Return the customer identity context directly down into your routes
+    return matched_customer
 
 # ----------------------------------------------------
-# 💾 FIXED MEDIUM/LOW: SANITIZED HISTORY LOGGING
+# 💾 SANITIZED LOGGING TRACKER (WITH CLIENT IDS)
 # ----------------------------------------------------
 def sanitize_for_csv(text: str) -> str:
-    """
-    Mitigates CSV Formula Injection by stripping dangerous leading spreadsheet characters.
-    """
     if not text:
         return ""
-    # If the text starts with Excel executable characters, prepend a safe single quote
     if text[0] in ('=', '+', '-', '@'):
         return f"'{text}"
     return text
 
-def append_to_history_log(engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
-    """
-    Thread-safe sanitized local system auditing transaction mechanism.
-    """
-    # FIXED OPT-IN: Only log if explicitly enabled via environment configuration
+def append_to_history_log(customer_id: str, engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
     if os.getenv("ENABLE_HISTORY_LOGGING", "false").lower() not in ("true", "1"):
         return
-
     try:
-        # MITIGATED DISK EXHAUSTION: Enforce a loose safety cap on local logging size limits
-        if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > 10 * 1024 * 1024: # 10MB Cap
-            logger.warning("⚠️ History log file size threshold exceeded. Skipping entry allocation.")
+        if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > 10 * 1024 * 1024:
+            logger.warning("⚠️ History log threshold exceeded.")
             return
 
         file_exists = _HISTORY_LOG_PATH.exists()
         timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Redact potentially sensitive parameters
-        clean_input = sanitize_for_csv(user_input)[:1000]  # Hard character threshold trimming
+        clean_input = sanitize_for_csv(user_input)[:1000]
         clean_output = sanitize_for_csv(ai_output)[:2000]
 
         with _history_file_lock:
             with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
                 writer = csv.writer(csv_file)
                 if not file_exists:
-                    writer.writerow(["Timestamp", "Engine", "Mode", "Input Payload", "AI Output Response"])
-                writer.writerow([timestamp_str, engine_name, task_type, clean_input, clean_output])
+                    # Added "Authorized Client ID" column header row
+                    writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response"])
+                writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output])
     except Exception as log_err:
         logger.error(f"⚠️ Request Logging Fault: {str(log_err)}")
 
@@ -155,8 +164,8 @@ _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lo
 
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
-    description="Multi-provider AI gateway for OpenAI and Anthropic.",
-    version="2.2.0",
+    description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
+    version="2.3.0",
     lifespan=app_lifespan,
     docs_url="/docs" if _enable_docs else None,
     redoc_url="/redoc" if _enable_docs else None,
@@ -195,8 +204,8 @@ class ChatRequest(BaseModel):
 async def system_health_check():
     return {"status": "healthy"}
 
-@app.post("/api/translate", tags=["OpenAI Core"], dependencies=[Depends(validate_gateway_token)])
-async def optimized_translation(payload: TranslationRequest):
+@app.post("/api/translate", tags=["OpenAI Core"])
+async def optimized_translation(payload: TranslationRequest, customer_id: str = Depends(validate_gateway_token)):
     try:
         client: AsyncOpenAI = gateway_state["openai"]
         response = await client.chat.completions.create(
@@ -207,10 +216,10 @@ async def optimized_translation(payload: TranslationRequest):
             ],
             temperature=0.2,
         )
-        content = response.choices[0].message.content or ""
+        content = response.choices.message.content or ""
         transformed_output = content.strip()
         
-        append_to_history_log("OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
+        append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
         raise
@@ -218,8 +227,8 @@ async def optimized_translation(payload: TranslationRequest):
         logger.exception("Translation request failed")
         raise HTTPException(status_code=500, detail="Translation service unavailable")
 
-@app.post("/api/claude/chat", tags=["Anthropic Core"], dependencies=[Depends(validate_gateway_token)])
-async def optimized_claude_chat(payload: ChatRequest):
+@app.post("/api/claude/chat", tags=["Anthropic Core"])
+async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends(validate_gateway_token)):
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
@@ -231,7 +240,7 @@ async def optimized_claude_chat(payload: ChatRequest):
         text_parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
         resolved_response = "".join(text_parts)
         
-        append_to_history_log("Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
+        append_to_history_log(customer_id, "Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
         return {"resolved_by": "Anthropic (Claude Sonnet 5)", "response_payload": resolved_response}
     except HTTPException:
         raise
