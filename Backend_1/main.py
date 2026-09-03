@@ -19,11 +19,9 @@ from pydantic import BaseModel, Field, field_validator
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
-# Dynamically detects if running natively on Render's cloud platform architecture
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
-    # Local laptop fallback logic: parse environment keys relative to your parent folder execution layer
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -42,12 +40,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()  # Prevents multithreaded write collisions
+_history_file_lock = Lock()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
 
-# Parse and build your customer key map database dynamically
 CUSTOMER_KEYS: dict[str, str] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
@@ -65,7 +62,6 @@ _missing = [
     ) if not value
 ]
 
-# Strict fail-closed initialization security guard
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
         f"CRITICAL SECURITY BLOCK: Missing environment configurations. "
@@ -76,7 +72,6 @@ if _missing or not CUSTOMER_KEYS:
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# Sliding window rate limiter configurations
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
@@ -106,9 +101,6 @@ def _enforce_rate_limit(token: str) -> None:
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
-    """
-    Checks the incoming token against your revolving database of authorized customer keys.
-    """
     matched_customer = None
     for secure_token, customer_id in CUSTOMER_KEYS.items():
         if secrets.compare_digest(header_token, secure_token):
@@ -121,11 +113,11 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
     _enforce_rate_limit(header_token)
     return matched_customer
 
+
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-# FIXED FALLBACK: Updated to match your fresh cloud database index target container perfectly
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-app-logs")
 ENABLE_PINECONE_LOGGING = os.getenv("ENABLE_PINECONE_LOGGING", "true").lower() in ("true", "1")
 
@@ -136,7 +128,8 @@ def sanitize_for_csv(text: str) -> str:
         return f"'{text}"
     return text
 
-def append_to_history_log(customer_id: str, engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
+# FIXED SYNTAX: Marked as an async def to allow background asynchronous data fetching loops
+async def append_to_history_log(customer_id: str, engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
     """
     Simultaneously writes local CSV audits while streaming vector embeddings to Pinecone Cloud.
     """
@@ -161,13 +154,12 @@ def append_to_history_log(customer_id: str, engine_name: str, task_type: str, us
     # Layer B: Cloud Native Pinecone Vector Database Logging Integration
     if ENABLE_PINECONE_LOGGING and PINECONE_API_KEY:
         try:
-            # We call your existing OpenAI connection wrapper instance to generate a standardized vector text layout representation
             openai_client = gateway_state.get("openai")
             if openai_client:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
-                # Fetch a standard vector footprint calculation
-                embedding_response = openai_client.embeddings.create(
+                # FIXED SYNTAX: Added 'await' to cleanly compile background vector parameters before extraction
+                embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
                     model="text-embedding-3-small"
                 )
@@ -188,7 +180,6 @@ def append_to_history_log(customer_id: str, engine_name: str, task_type: str, us
                 # [Production Hook Note]: The vector_values and metadata_payload are ready to pin straight into your pipeline indexes!
         except Exception as pinecone_err:
             logger.error(f"⚠️ Pinecone Cloud Sync Disruption: {str(pinecone_err)}")
-
 
 # ----------------------------------------------------
 # Lifespan Connection Pools
@@ -273,7 +264,8 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
-        append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
+        # FIXED SYNTAX: Added 'await' because our history log function is now an asynchronous background operation handler
+        await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
         raise
@@ -294,7 +286,8 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
         text_parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
         resolved_response = "".join(text_parts)
         
-        append_to_history_log(customer_id, "Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
+        # FIXED SYNTAX: Added 'await' to match asynchronous logging handler specifications cleanly
+        await append_to_history_log(customer_id, "Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
         return {"resolved_by": "Anthropic (Claude Sonnet 5)", "response_payload": resolved_response}
     except HTTPException:
         raise
