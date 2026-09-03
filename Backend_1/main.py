@@ -17,21 +17,25 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
-# 🌍 RESILIENT ENVIRONMENT FILE RESOLUTION
+# 🌍 ENTERPRISE RESILIENT ENVIRONMENT FILE RESOLUTION
 # ----------------------------------------------------
-# Check the immediate root directory first (Render convention), then fallback to parent mapping
-_RENDER_ROOT_PATH = Path(__file__).resolve().parent.parent / ".env"
-_LOCAL_CWD_PATH = Path(".").resolve() / ".env"
+# 1. Check Render's exact absolute cloud file system mount path first
+_RENDER_ABSOLUTE_PATH = Path("/opt/render/project/src/.env")
 
-if _RENDER_ROOT_PATH.exists():
-    _ENV_PATH = _RENDER_ROOT_PATH
-elif _LOCAL_CWD_PATH.exists():
-    _ENV_PATH = _LOCAL_CWD_PATH
+# 2. Check local relative development workspace paths
+_LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
+_LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
+
+if _RENDER_ABSOLUTE_PATH.exists():
+    _ENV_PATH = _RENDER_ABSOLUTE_PATH
+elif _LOCAL_REPO_PARENT.exists():
+    _ENV_PATH = _LOCAL_REPO_PARENT
 else:
-    # Default fallback path matching your original structural layout mapping
-    _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+    _ENV_PATH = _LOCAL_CURRENT_CWD
 
+# Load variables into system memory using the verified absolute path reference
 load_dotenv(dotenv_path=_ENV_PATH)
+
 
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
