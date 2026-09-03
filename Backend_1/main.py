@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
-from pinecone import Pinecone
+from pinecone import Pinecone  # Native v10 release-tier engine module library
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
@@ -92,7 +92,7 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
+        while bucket and now - bucket > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
             raise HTTPException(
@@ -114,6 +114,7 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
     _enforce_rate_limit(header_token)
     return matched_customer
 
+
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
@@ -130,7 +131,7 @@ def sanitize_for_csv(text: str) -> str:
 
 async def append_to_history_log(customer_id: str, engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
     """
-    Simultaneously writes local CSV audits while streaming vector embeddings to Pinecone Cloud.
+    Simultaneously writes local CSV audits while streaming vector embeddings to Pinecone Cloud indices.
     """
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clean_input = sanitize_for_csv(user_input)[:1000]
@@ -150,14 +151,15 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
         except Exception as log_err:
             logger.error(f"⚠️ CSV Log Fault: {str(log_err)}")
 
-    # Layer B: Cloud Native Pinecone Vector Database Logging Integration
+    # Layer B: Active Cloud Pinecone Push Routine
     if ENABLE_PINECONE_LOGGING and PINECONE_API_KEY:
         try:
             openai_client = gateway_state.get("openai")
-            if openai_client:
+            pc_client = gateway_state.get("pinecone")
+            
+            if openai_client and pc_client:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
-                # FIXED: Added explicit await keyword to ensure vector tokens are compiled cleanly
                 embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
                     model="text-embedding-3-small"
@@ -165,16 +167,26 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                 vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
-                metadata_payload = {
-                    "timestamp": timestamp_str,
-                    "customer_id": customer_id,
-                    "engine": engine_name,
-                    "mode": task_type,
-                    "input_text": clean_input,
-                    "output_text": clean_output
-                }
                 
                 logger.info(f"🚀 Streaming vector packet {log_id} directly to Pinecone index: {PINECONE_INDEX_NAME}")
+                
+                # FIXED v10 SYNTAX UPDATE: Leverages .documents.upsert to support new schema engines
+                index_target = pc_client.index(PINECONE_INDEX_NAME)
+                index_target.documents.upsert(
+                    documents=[
+                        {
+                            "_id": log_id,
+                            "embedding": vector_values,
+                            "timestamp": timestamp_str,
+                            "customer_id": customer_id,
+                            "engine": engine_name,
+                            "mode": task_type,
+                            "input_text": clean_input,
+                            "output_text": clean_output
+                        }
+                    ]
+                )
+                logger.info(f"✅ Vector transaction successfully committed inside {PINECONE_INDEX_NAME} tables.")
         except Exception as pinecone_err:
             logger.error(f"⚠️ Pinecone Cloud Sync Disruption: {str(pinecone_err)}")
 
@@ -185,9 +197,12 @@ gateway_state: dict = {}
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    logger.info("Initializing AI client pools")
+    logger.info("Initializing AI and Database client pools")
     gateway_state["openai"] = AsyncOpenAI(api_key=OPENAI_API_KEY)
     gateway_state["anthropic"] = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    
+    if PINECONE_API_KEY:
+        gateway_state["pinecone"] = Pinecone(api_key=PINECONE_API_KEY)
     yield
     logger.info("Closing AI client connections")
     await gateway_state["openai"].close()
@@ -261,7 +276,6 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
-        # FIXED: Changed 'transformed_text' to 'transformed_output' precisely to clear the NameError
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
@@ -275,8 +289,7 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            # FIXED: Pointed straight to the active corporate alias model string
-            model="claude-3-5-sonnet-latest",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
