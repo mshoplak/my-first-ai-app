@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
-from pinecone import Pinecone  # Native v10 release-tier engine module library
+from pinecone import Pinecone  # Official high-performance vector distribution module library
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
@@ -114,7 +114,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
     _enforce_rate_limit(header_token)
     return matched_customer
 
-
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
@@ -151,7 +150,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
         except Exception as log_err:
             logger.error(f"⚠️ CSV Log Fault: {str(log_err)}")
 
-    # Layer B: Active Cloud Pinecone Push Routine
+    # Layer B: Production-Grade Vector Injection Loop
     if ENABLE_PINECONE_LOGGING and PINECONE_API_KEY:
         try:
             openai_client = gateway_state.get("openai")
@@ -167,22 +166,25 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                 vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
+                metadata_payload = {
+                    "timestamp": timestamp_str,
+                    "customer_id": customer_id,
+                    "engine": engine_name,
+                    "mode": task_type,
+                    "input_text": clean_input,
+                    "output_text": clean_output
+                }
                 
                 logger.info(f"🚀 Streaming vector packet {log_id} directly to Pinecone index: {PINECONE_INDEX_NAME}")
                 
-                # FIXED v10 SYNTAX UPDATE: Leverages .documents.upsert to support new schema engines
+                # FIXED VECTOR ARRAY PARSING ENGINE CALL: Maps fields explicitly to native list variables
                 index_target = pc_client.index(PINECONE_INDEX_NAME)
-                index_target.documents.upsert(
-                    documents=[
+                index_target.upsert(
+                    vectors=[
                         {
-                            "_id": log_id,
-                            "embedding": vector_values,
-                            "timestamp": timestamp_str,
-                            "customer_id": customer_id,
-                            "engine": engine_name,
-                            "mode": task_type,
-                            "input_text": clean_input,
-                            "output_text": clean_output
+                            "id": log_id,
+                            "values": vector_values,
+                            "metadata": metadata_payload
                         }
                     ]
                 )
