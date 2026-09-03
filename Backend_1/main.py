@@ -16,9 +16,23 @@ from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
-# Resolve .env from repo parent relative to this file
-_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+# ----------------------------------------------------
+# 🌍 RESILIENT ENVIRONMENT FILE RESOLUTION
+# ----------------------------------------------------
+# Check the immediate root directory first (Render convention), then fallback to parent mapping
+_RENDER_ROOT_PATH = Path(__file__).resolve().parent.parent / ".env"
+_LOCAL_CWD_PATH = Path(".").resolve() / ".env"
+
+if _RENDER_ROOT_PATH.exists():
+    _ENV_PATH = _RENDER_ROOT_PATH
+elif _LOCAL_CWD_PATH.exists():
+    _ENV_PATH = _LOCAL_CWD_PATH
+else:
+    # Default fallback path matching your original structural layout mapping
+    _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
 load_dotenv(dotenv_path=_ENV_PATH)
+
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
 _history_file_lock = Lock()
