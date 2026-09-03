@@ -2,11 +2,12 @@ import logging
 import os
 import secrets
 import time
+import csv  # <-- Added for structural spreadsheet logging
+from datetime import datetime  # <-- Added for human-readable calendar tracking timestamps
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
-
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
@@ -18,6 +19,10 @@ from pydantic import BaseModel, Field, field_validator
 # Resolve .env from repo parent relative to this file (CWD-independent)
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
+
+# Establish local pathing layouts for our persistent text sheet records
+_HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
+_history_file_lock = Lock()  # Prevents overlapping multi-threaded write collisions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
@@ -58,40 +63,13 @@ _rate_lock = Lock()
 
 ALLOWED_LANGUAGES = frozenset(
     {
-        "arabic",
-        "bengali",
-        "chinese",
-        "czech",
-        "danish",
-        "dutch",
-        "english",
-        "finnish",
-        "french",
-        "german",
-        "greek",
-        "hebrew",
-        "hindi",
-        "hungarian",
-        "indonesian",
-        "italian",
-        "japanese",
-        "korean",
-        "malay",
-        "norwegian",
-        "polish",
-        "portuguese",
-        "romanian",
-        "russian",
-        "spanish",
-        "swedish",
-        "thai",
-        "turkish",
-        "ukrainian",
-        "urdu",
-        "vietnamese",
+        "arabic", "bengali", "chinese", "czech", "danish", "dutch", "english",
+        "finnish", "french", "german", "greek", "hebrew", "hindi", "hungarian",
+        "indonesian", "italian", "japanese", "korean", "malay", "norwegian",
+        "polish", "portuguese", "romanian", "russian", "spanish", "swedish",
+        "thai", "turkish", "ukrainian", "urdu", "vietnamese",
     }
 )
-
 
 def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
@@ -106,19 +84,34 @@ def _enforce_rate_limit(token: str) -> None:
             )
         bucket.append(now)
 
-
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
     if not secrets.compare_digest(header_token, GATEWAY_SECRET):
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
     _enforce_rate_limit(header_token)
     return header_token
 
+def append_to_history_log(engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
+    """
+    Safely appends a structural transaction line entry directly into our local CSV log.
+    """
+    try:
+        file_exists = _HISTORY_LOG_PATH.exists()
+        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        with _history_file_lock:
+            with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
+                writer = csv.writer(csv_file)
+                if not file_exists:
+                    # Initialize headers if the history tracker file is brand new
+                    writer.writerow(["Timestamp", "Engine Module", "Transaction Mode", "User Prompt / Input", "AI Output Response"])
+                writer.writerow([timestamp_str, engine_name, task_type, user_input, ai_output])
+    except Exception as log_err:
+        logger.error(f"⚠️ Internal Request History Logging Failed: {str(log_err)}")
 
 # ----------------------------------------------------
 # Lifespan / client pools
 # ----------------------------------------------------
 gateway_state: dict = {}
-
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
@@ -129,7 +122,6 @@ async def app_lifespan(app: FastAPI):
     logger.info("Closing AI client connections")
     await gateway_state["openai"].close()
     await gateway_state["anthropic"].close()
-
 
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {
     "1",
@@ -155,7 +147,6 @@ _allowed_origins = [
     ).split(",")
     if origin.strip()
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
@@ -163,7 +154,6 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", API_KEY_NAME],
 )
-
 
 # ----------------------------------------------------
 # Schemas
@@ -183,10 +173,8 @@ class TranslationRequest(BaseModel):
             )
         return normalized
 
-
 class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
-
 
 # ----------------------------------------------------
 # Routes
@@ -194,7 +182,6 @@ class ChatRequest(BaseModel):
 @app.get("/health", tags=["Monitoring"])
 async def system_health_check():
     return {"status": "healthy"}
-
 
 @app.post(
     "/api/translate",
@@ -220,16 +207,20 @@ async def optimized_translation(payload: TranslationRequest):
             temperature=0.2,
         )
         content = response.choices[0].message.content or ""
+        transformed_output = content.strip()
+        
+        # LOG RETRIEVAL ASSIGNMENT: Append this transaction data directly to storage sheets
+        append_to_history_log("OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
+        
         return {
             "resolved_by": "OpenAI (gpt-4o)",
-            "transformed_text": content.strip(),
+            "transformed_text": transformed_output,
         }
     except HTTPException:
         raise
     except Exception:
         logger.exception("Translation request failed")
         raise HTTPException(status_code=500, detail="Translation service unavailable")
-
 
 @app.post(
     "/api/claude/chat",
@@ -248,9 +239,14 @@ async def optimized_claude_chat(payload: ChatRequest):
         text_parts = [
             block.text for block in response.content if getattr(block, "type", None) == "text"
         ]
+        resolved_response = "".join(text_parts)
+        
+        # LOG RETRIEVAL ASSIGNMENT: Append this transaction data directly to storage sheets
+        append_to_history_log("Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
+        
         return {
             "resolved_by": "Anthropic (Claude Sonnet 5)",
-            "response_payload": "".join(text_parts),
+            "response_payload": resolved_response,
         }
     except HTTPException:
         raise
