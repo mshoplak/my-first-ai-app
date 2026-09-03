@@ -290,12 +290,12 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model="claude-3-5-sonnet-v2",  # HARD-FIXED STABLE ROUTING ID
+            model="claude-3-5-sonnet-latest",  # HIGH-PRIORITY NATIVE SDK SELECTION STRING
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        # FIXED ARRAY PARSING ACCESSOR: Explicitly pull index position 0 to parse message texts
+        # NATIVE SDK ACCESSOR WORKAROUND: Extract text cleanly out of position 0 content block schemas
         resolved_response = response.content[0].text.strip()
         
         await append_to_history_log(customer_id, "Anthropic (Claude 3.5 Sonnet)", "Architect Chat Prompt", payload.prompt, resolved_response)
