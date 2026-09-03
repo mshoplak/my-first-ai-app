@@ -159,11 +159,13 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
             if openai_client and pc_client:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
+                # FIXED OVERHAUL: Set model to text-embedding-3-large and locked dimensions=2048 to match your fresh index perfectly
                 embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
-                    model="text-embedding-3-small"
+                    model="text-embedding-3-large",
+                    dimensions=2048  # Forces OpenAI to natively truncate and format the array directly to 2048 fields!
                 )
-                vector_values = embedding_response.data[0].embedding
+                vector_values = embedding_response.data.embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -177,8 +179,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                 
                 logger.info(f"🚀 Streaming vector packet {log_id} directly to Pinecone index: {PINECONE_INDEX_NAME}")
                 
-                # FIXED VECTOR ARRAY PARSING ENGINE CALL: Maps fields explicitly to native list variables
-                index_target = pc_client.index(PINECONE_INDEX_NAME)
+                index_target = pc_client.Index(PINECONE_INDEX_NAME)
                 index_target.upsert(
                     vectors=[
                         {
@@ -275,7 +276,7 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
             ],
             temperature=0.2,
         )
-        content = response.choices[0].message.content or ""
+        content = response.choices.message.content or ""
         transformed_output = content.strip()
         
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
