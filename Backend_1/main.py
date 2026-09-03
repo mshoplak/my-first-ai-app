@@ -260,9 +260,9 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
-        # FIXED: Awaiting the background logging operation handler correctly
+        # FIXED: Changed 'transformed_text' to 'transformed_output' precisely to clear the NameError
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
-        return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_text}
+        return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
         raise
     except Exception:
