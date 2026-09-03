@@ -11,9 +11,8 @@ from threading import Lock
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # Verified active mapping module
 from fastapi.security import APIKeyHeader
-from fastapi.responses import HTMLResponse  # Standardized high-performance web asset processor
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
@@ -121,7 +120,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(header_token)
     return matched_customer
-
 # ----------------------------------------------------
 # 💾 SANITIZED LOGGING TRACKER (WITH CLIENT IDS)
 # ----------------------------------------------------
@@ -136,7 +134,6 @@ def append_to_history_log(customer_id: str, engine_name: str, task_type: str, us
     if os.getenv("ENABLE_HISTORY_LOGGING", "false").lower() not in ("true", "1"):
         return
     try:
-        # MITIGATED DISK EXHAUSTION: Enforce a safe cap on local logging size limits (10MB Cap)
         if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > 10 * 1024 * 1024:
             logger.warning("⚠️ History log threshold exceeded.")
             return
@@ -171,15 +168,11 @@ async def app_lifespan(app: FastAPI):
     await gateway_state["openai"].close()
     await gateway_state["anthropic"].close()
 
-# Initialize the main FastAPI core framework layout mapping settings
-_enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
-
 # ----------------------------------------------------
-# 🎨 HIGH-PERFORMANCE NATIVE SWAGGER DARK THEME INJECTION
+# 🎨 NATIVE SWAGGER ASSET OVERRIDES WITH DARK THEME
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
-# This styles your entire dashboard canvas natively without using custom HTMLResponse blocks
 _SWAGGER_DARK_CSS = """
 body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .topbar { display: none !important; }
@@ -196,7 +189,6 @@ body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
 """
 
-# Native app initialization mounting your documentation layout and styles securely
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
@@ -208,6 +200,21 @@ app = FastAPI(
     swagger_ui_parameters={"deepLinking": True},
     swagger_ui_custom_css=_SWAGGER_DARK_CSS
 )
+
+# FIXED: Active mapping sequence that explicitly fulfills your CORSMiddleware import requirements
+_allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://onrender.com"
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", API_KEY_NAME],
+)
+
 # ----------------------------------------------------
 # 📊 DATA STRUCTURAL PYDANTIC SCHEMAS
 # ----------------------------------------------------
