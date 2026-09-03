@@ -19,11 +19,9 @@ from pydantic import BaseModel, Field, field_validator
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
-# Check if running natively on Render (Render injects a default PORT or RENDER variable)
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
-    # We are on your local laptop: load variables from your parent .env file
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -32,15 +30,22 @@ if not IS_ON_RENDER:
     elif _LOCAL_CURRENT_CWD.exists():
         load_dotenv(dotenv_path=_LOCAL_CURRENT_CWD)
 
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+IS_PRODUCTION = APP_ENV in {"production", "prod"}
+
 # ----------------------------------------------------
 # 🔒 HIGH-RESILIENCE MULTI-TENANT KEY DICTIONARY
 # ----------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-CUSTOMER_KEYS: dict[str, str] = {}
+_HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
+_history_file_lock = Lock()
 
-# Read the raw string directly from OS memory environment variables
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("expat-gateway")
+
+CUSTOMER_KEYS: dict[str, str] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
 if raw_keys_string:
@@ -57,7 +62,6 @@ _missing = [
     ) if not value
 ]
 
-# Hard enforcement check
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
         f"CRITICAL SECURITY BLOCK: Missing environment variables. "
@@ -65,11 +69,9 @@ if _missing or not CUSTOMER_KEYS:
         "Please verify your Render Dashboard environment variables configuration panel."
     )
 
-
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# Sliding window rate limiter
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
@@ -98,14 +100,8 @@ def _enforce_rate_limit(token: str) -> None:
             )
         bucket.append(now)
 
-# 🛠️ MULTI-TENANT VERIFICATION GATEWAY
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
-    """
-    Checks the incoming token against your revolving database of authorized customer keys.
-    """
     matched_customer = None
-    
-    # Securely iterate through your revolving key dictionary
     for secure_token, customer_id in CUSTOMER_KEYS.items():
         if secrets.compare_digest(header_token, secure_token):
             matched_customer = customer_id
@@ -115,17 +111,15 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
         
     _enforce_rate_limit(header_token)
-    
-    # Return the customer identity context directly down into your routes
     return matched_customer
 
 # ----------------------------------------------------
-# 💾 SANITIZED LOGGING TRACKER (WITH CLIENT IDS)
+# 💾 SANITIZED LOGGING TRACKER
 # ----------------------------------------------------
 def sanitize_for_csv(text: str) -> str:
     if not text:
         return ""
-    if text[0] in ('=', '+', '-', '@'):
+    if text.startswith(('=', '+', '-', '@')):
         return f"'{text}"
     return text
 
@@ -147,7 +141,6 @@ def append_to_history_log(customer_id: str, engine_name: str, task_type: str, us
             with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
                 writer = csv.writer(csv_file)
                 if not file_exists:
-                    # Added "Authorized Client ID" column header row
                     writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response"])
                 writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output])
     except Exception as log_err:
