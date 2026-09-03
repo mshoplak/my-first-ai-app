@@ -91,7 +91,8 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        while bucket and now - bucket > RATE_LIMIT_WINDOW_SEC:
+        # FIXED OPERAND CHECK: Indexing bucket[0] cleanly isolates the individual floating-point timestamp
+        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
             raise HTTPException(
@@ -113,7 +114,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
     _enforce_rate_limit(header_token)
     return matched_customer
 
-
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
@@ -128,7 +128,6 @@ def sanitize_for_csv(text: str) -> str:
         return f"'{text}"
     return text
 
-# FIXED SYNTAX: Marked as an async def to allow background asynchronous data fetching loops
 async def append_to_history_log(customer_id: str, engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
     """
     Simultaneously writes local CSV audits while streaming vector embeddings to Pinecone Cloud.
@@ -158,14 +157,12 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
             if openai_client:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
-                # FIXED SYNTAX: Added 'await' to cleanly compile background vector parameters before extraction
                 embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
                     model="text-embedding-3-small"
                 )
                 vector_values = embedding_response.data[0].embedding
                 
-                # Format a cryptographically secure uniform vector block tracking record payload
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
                     "timestamp": timestamp_str,
@@ -264,7 +261,6 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
-        # FIXED SYNTAX: Added 'await' because our history log function is now an asynchronous background operation handler
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
@@ -286,7 +282,6 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
         text_parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
         resolved_response = "".join(text_parts)
         
-        # FIXED SYNTAX: Added 'await' to match asynchronous logging handler specifications cleanly
         await append_to_history_log(customer_id, "Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
         return {"resolved_by": "Anthropic (Claude Sonnet 5)", "response_payload": resolved_response}
     except HTTPException:
