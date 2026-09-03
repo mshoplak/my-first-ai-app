@@ -19,11 +19,9 @@ from pydantic import BaseModel, Field, field_validator
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
-# Dynamically checks if running natively on Render's cloud platform architecture
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
-    # Local laptop fallback logic: parse environment keys relative to your parent folder execution layer
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -200,9 +198,11 @@ app = FastAPI(
     docs_url="/docs" if _enable_docs else None,
     redoc_url="/redoc" if _enable_docs else None,
     openapi_url="/openapi.json" if _enable_docs else None,
-    swagger_ui_parameters={"deepLinking": True},
-    swagger_ui_custom_css=_SWAGGER_DARK_CSS,
-    # SOLUTION: Explicitly point assets to a global CDN network to bypass local asset path 500 exceptions
+    # FIXED: We group deepLinking and custom styles together directly inside swagger_ui_parameters to ensure execution priority
+    swagger_ui_parameters={
+        "deepLinking": True,
+        "customCss": _SWAGGER_DARK_CSS
+    },
     swagger_ui_js_url="https://jsdelivr.net",
     swagger_ui_css_url="https://jsdelivr.net"
 )
@@ -289,4 +289,3 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     except Exception:
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Chat service unavailable")
-
