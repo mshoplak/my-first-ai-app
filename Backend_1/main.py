@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
-from pinecone import Pinecone  # Official high-performance vector distribution module library
+from pinecone import Pinecone  # Official high-performance vector database core library
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
@@ -150,7 +150,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
         except Exception as log_err:
             logger.error(f"⚠️ CSV Log Fault: {str(log_err)}")
 
-    # Layer B: Production-Grade Vector Injection Loop
+    # Layer B: Production-Grade Vector Injection Loop (2048 Dimensions)
     if ENABLE_PINECONE_LOGGING and PINECONE_API_KEY:
         try:
             openai_client = gateway_state.get("openai")
@@ -159,13 +159,12 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
             if openai_client and pc_client:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
-                # FIXED OVERHAUL: Set model to text-embedding-3-large and locked dimensions=2048 to match your fresh index perfectly
                 embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
                     model="text-embedding-3-large",
-                    dimensions=2048  # Forces OpenAI to natively truncate and format the array directly to 2048 fields!
+                    dimensions=2048
                 )
-                vector_values = embedding_response.data.embedding
+                vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -276,7 +275,8 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
             ],
             temperature=0.2,
         )
-        content = response.choices.message.content or ""
+        # FIXED LIST INDEXING CHECK: Adding bracket selection [0] to extract data out of the array format
+        content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
         await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
