@@ -11,8 +11,9 @@ from threading import Lock
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
-from fastapi.middleware.cors import CORSMiddleware  # Verified active mapping module
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
+from fastapi.openapi.docs import get_swagger_ui_html  # Natively used lower down
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
@@ -113,6 +114,7 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
     _enforce_rate_limit(header_token)
     return matched_customer
 
+
 # ----------------------------------------------------
 # 💾 SANITIZED LOGGING TRACKER (WITH CLIENT IDS)
 # ----------------------------------------------------
@@ -162,7 +164,7 @@ async def app_lifespan(app: FastAPI):
     await gateway_state["anthropic"].close()
 
 # ----------------------------------------------------
-# 🎨 RESTORED HIGH-PRIORITY NATIVE DARK CYBER CSS VARIABLE
+# 🎨 RECONFIGURED STYLES & ROUTE INJECTIONS
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
@@ -182,20 +184,29 @@ body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
 """
 
-# Direct pre-built link that forces your browser to pull dark material themes automatically [1]
-_DARK_THEME_CDN_LINK = "https://jsdelivr.net"
-
+# Initialize app natively with docs disabled at the root level configuration layer
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
     version="2.3.0",
     lifespan=app_lifespan,
-    docs_url="/docs" if _enable_docs else None,
-    redoc_url="/redoc" if _enable_docs else None,
-    openapi_url="/openapi.json" if _enable_docs else None,
-    swagger_ui_parameters={"deepLinking": True},
-    swagger_ui_custom_css=_DARK_THEME_CDN_LINK  # <-- PASSING THE CDN LINK DIRECTLY BRINGS THE DARK THEME TO LIFE!
+    docs_url=None,      # Disable native route so our custom function below overrides it
+    redoc_url=None,
+    openapi_url="/openapi.json" if _enable_docs else None
 )
+
+# FIXED CORE GATEWAY LOOKUP: Intercepts browser traffic and actively applies style sheets
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    if not _enable_docs:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",  # Secure fallback path reference mapping
+        title=app.title + " - Premium Dark",
+        oauth2_redirect_url=app.oauth2_redirect_url,
+        swagger_ui_parameters={"deepLinking": True},
+        swagger_custom_css=_SWAGGER_DARK_CSS  # Injecting raw text styles explicitly into the layout parameters
+    )
 
 _allowed_origins = [
     "http://localhost:3000",
@@ -278,4 +289,3 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     except Exception:
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Chat service unavailable")
-
