@@ -174,103 +174,40 @@ async def app_lifespan(app: FastAPI):
 # Initialize the main FastAPI core framework layout mapping settings
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
+# ----------------------------------------------------
+# 🎨 HIGH-PERFORMANCE NATIVE SWAGGER DARK THEME INJECTION
+# ----------------------------------------------------
+_enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
+
+# This styles your entire dashboard canvas natively without using custom HTMLResponse blocks
+_SWAGGER_DARK_CSS = """
+body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
+.swagger-ui .topbar { display: none !important; }
+.swagger-ui .info .title { color: #f0f6fc !important; font-weight: 700 !important; }
+.swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info td { color: #8b949e !important; }
+.swagger-ui .scheme-container { background: #161b22 !important; border: 1px solid #30363d !important; border-radius: 8px !important; }
+.swagger-ui .opblock { border-radius: 8px !important; border: 1px solid #30363d !important; background: #161b22 !important; box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
+.swagger-ui .opblock .opblock-summary-title { color: #f0f6fc !important; }
+.swagger-ui input[type=text], .swagger-ui textarea { background-color: #0d1117 !important; color: #58a6ff !important; border: 1px solid #30363d !important; border-radius: 6px !important; padding: 10px !important; caret-color: #ff7b72 !important; font-weight: 600 !important; }
+.swagger-ui .btn { background: #21262d !important; color: #c9d1d9 !important; border: 1px solid #30363d !important; border-radius: 6px !important; }
+.swagger-ui .btn.execute { background: #238636 !important; color: #ffffff !important; border-color: #2ea44f !important; font-weight: 700 !important; }
+.swagger-ui pre { background: #0d1117 !important; border: 1px solid #30363d !important; color: #79c0ff !important; }
+.swagger-ui .modal-ux { background-color: #161b22 !important; border: 1px solid #30363d !important; border-radius: 12px !important; }
+.swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
+"""
+
+# Native app initialization mounting your documentation layout and styles securely
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
     version="2.3.0",
     lifespan=app_lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url="/openapi.json" if _enable_docs else None
+    docs_url="/docs" if _enable_docs else None,
+    redoc_url="/redoc" if _enable_docs else None,
+    openapi_url="/openapi.json" if _enable_docs else None,
+    swagger_ui_parameters={"deepLinking": True},
+    swagger_ui_custom_css=_SWAGGER_DARK_CSS
 )
-# ----------------------------------------------------
-# 🎨 CUSTOM MODERN PREMIUM DARK CYBER THEME INJECTION
-# ----------------------------------------------------
-@app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
-async def custom_swagger_ui_html():
-    if not _enable_docs:
-        raise HTTPException(status_code=404, detail="Not Found")
-        
-    custom_css = """
-    body { background-color: #0d1117 !important; color: #c9d1d9 !important; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif !important; }
-    .swagger-ui .topbar { display: none !important; }
-    .swagger-ui .info .title { color: #f0f6fc !important; font-weight: 700 !important; }
-    .swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info td { color: #8b949e !important; }
-    .swagger-ui .scheme-container { background: #161b22 !important; box-shadow: none !important; border: 1px solid #30363d !important; border-radius: 8px !important; margin: 20px 0 !important; }
-    .swagger-ui .opblock { border-radius: 8px !important; box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; border: 1px solid #30363d !important; background: #161b22 !important; }
-    .swagger-ui .opblock .opblock-summary { border-bottom: 1px solid rgba(255,255,255,0.05) !important; }
-    .swagger-ui .opblock .opblock-summary-title { color: #f0f6fc !important; }
-    .swagger-ui .opblock-description-wrapper p, .swagger-ui .opblock-external-docs-wrapper p, .swagger-ui .opblock-title_normal p { color: #8b949e !important; }
-    .swagger-ui .tabli button { color: #c9d1d9 !important; font-weight: 600 !important; }
-    .swagger-ui label { color: #8b949e !important; }
-    .swagger-ui input[type=text], .swagger-ui textarea { background-color: #0d1117 !important; color: #58a6ff !important; border: 1px solid #30363d !important; border-radius: 6px !important; padding: 10px !important; font-weight: 600 !important; font-family: monospace !important; caret-color: #ff7b72 !important; }
-    .swagger-ui input[type=text]:focus, .swagger-ui textarea:focus { border-color: #58a6ff !important; box-shadow: 0 0 0 3px rgba(88,166,255,0.3) !important; outline: none !important; }
-    .swagger-ui .btn { background: #21262d !important; color: #c9d1d9 !important; border: 1px solid #30363d !important; border-radius: 6px !important; box-shadow: none !important; transition: all 0.2s !important; }
-    .swagger-ui .btn:hover { background: #30363d !important; color: #f0f6fc !important; border-color: #8b949e !important; }
-    .swagger-ui .btn.execute { background: #238636 !important; color: #ffffff !important; border-color: #2ea44f !important; font-weight: 700 !important; }
-    .swagger-ui .btn.execute:hover { background: #2ea44f !important; }
-    .swagger-ui .btn.authorize { background: transparent !important; color: #388bfd !important; border-color: #388bfd !important; }
-    .swagger-ui .btn.authorize svg { fill: #388bfd !important; }
-    .swagger-ui .btn.authorize:hover { background: rgba(56,139,253,0.1) !important; }
-    .swagger-ui th { color: #f0f6fc !important; border-bottom: 2px solid #30363d !important; }
-    .swagger-ui td { color: #c9d1d9 !important; }
-    .swagger-ui .response-col_status { color: #58a6ff !important; font-weight: 700 !important; }
-    .swagger-ui pre { background: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 6px !important; color: #ff7b72 !important; }
-    .swagger-ui pre.microlight { background: #0d1117 !important; }
-    .swagger-ui pre code { color: #79c0ff !important; }
-    .swagger-ui .opblock.opblock-post { background: #161b22 !important; border-color: #388bfd !important; }
-    .swagger-ui .opblock.opblock-post .opblock-summary { background: rgba(56,139,253,0.05) !important; }
-    .swagger-ui .opblock.opblock-post .opblock-summary-method { background: #388bfd !important; color: #ffffff !important; border-radius: 4px !important; }
-    .swagger-ui .opblock.opblock-get { background: #161b22 !important; border-color: #3f6e51 !important; }
-    .swagger-ui .opblock.opblock-get .opblock-summary { background: rgba(46,164,79,0.05) !important; }
-    .swagger-ui .opblock.opblock-get .opblock-summary-method { background: #2ea44f !important; color: #ffffff !important; border-radius: 4px !important; }
-    .swagger-ui .modal-ux { background-color: #161b22 !important; border: 1px solid #30363d !important; border-radius: 12px !important; box-shadow: 0 20px 40px rgba(0,0,0,0.5) !important; }
-    .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
-    .swagger-ui .modal-ux-content h4 { color: #8b949e !important; }
-    """
-
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <link rel="stylesheet" type="text/css" href="https://jsdelivr.net">
-    <title>Expat AI Advanced Enterprise Gateway - Premium Dark</title>
-    <style>{custom_css}</style>
-    </head>
-    <body>
-    <div id="swagger-ui"></div>
-    <script src="https://jsdelivr.net"></script>
-    <script>
-        const ui = SwaggerUIBundle({{
-            url: '/openapi.json', 
-            dom_id: '#swagger-ui',
-            presets: [
-                SwaggerUIBundle.presets.apis
-            ],
-            layout: "BaseLayout",
-            deepLinking: true,
-            showExtensions: true,
-            showCommonExtensions: true
-        }});
-    </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
-
-_allowed_origins = [
-    origin.strip() for origin in os.getenv(
-        "ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-    ).split(",") if origin.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", API_KEY_NAME],
-)
-
 # ----------------------------------------------------
 # 📊 DATA STRUCTURAL PYDANTIC SCHEMAS
 # ----------------------------------------------------
