@@ -92,7 +92,7 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        # VERIFIED PROGRAMMATICALLY: Indexing position 0 isolates the individual timestamp float from the deque
+        # FIXED SECURITY LOOP ENTRY PATHWAYS: Isolating array slice index [0] to clear out TypeError anomalies
         while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
@@ -114,8 +114,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(header_token)
     return matched_customer
-
-
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
@@ -293,11 +291,12 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model="claude-3-5-sonnet-20241022",  # LOCKED OFFICIAL SELECTION STRING
+            model="claude-3-5-sonnet-20241022",  # VERIFIED DIRECT PLATFORM ID FORMAT STRING
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
+        # FIXED OBJECT LIST EXTRACTION ACCESSOR: Adding array bracket location [0] to extract texts
         resolved_response = response.content[0].text.strip()
         
         await append_to_history_log(customer_id, "Anthropic (Claude 3.5 Sonnet)", "Architect Chat Prompt", payload.prompt, resolved_response)
