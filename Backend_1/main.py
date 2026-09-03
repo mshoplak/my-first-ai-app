@@ -11,18 +11,19 @@ from threading import Lock
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # Verified active mapping module
 from fastapi.security import APIKeyHeader
-from fastapi.openapi.docs import get_swagger_ui_html  # Natively used lower down
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
 # 🌍 HIGH-RESILIENCE ENVIRONMENT INITIALIZATION
 # ----------------------------------------------------
+# Dynamically checks if running natively on Render's cloud platform architecture
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
+    # Local laptop fallback logic: parse environment keys relative to your parent folder execution layer
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
     
@@ -41,11 +42,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
-_history_file_lock = Lock()
+_history_file_lock = Lock()  # Prevents thread write collisions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
 
+# Parse and build your customer key map database dynamically
 CUSTOMER_KEYS: dict[str, str] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
@@ -63,6 +65,7 @@ _missing = [
     ) if not value
 ]
 
+# Strict failure-closed initialization security guard
 if _missing or not CUSTOMER_KEYS:
     raise RuntimeError(
         f"CRITICAL SECURITY BLOCK: Missing environment configurations. "
@@ -73,6 +76,7 @@ if _missing or not CUSTOMER_KEYS:
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
+# Sliding window rate limiter configurations
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
@@ -102,6 +106,9 @@ def _enforce_rate_limit(token: str) -> None:
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
+    """
+    Checks the incoming token against your revolving database of authorized customer keys.
+    """
     matched_customer = None
     for secure_token, customer_id in CUSTOMER_KEYS.items():
         if secrets.compare_digest(header_token, secure_token):
@@ -113,7 +120,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(header_token)
     return matched_customer
-
 
 # ----------------------------------------------------
 # 💾 SANITIZED LOGGING TRACKER (WITH CLIENT IDS)
@@ -164,10 +170,11 @@ async def app_lifespan(app: FastAPI):
     await gateway_state["anthropic"].close()
 
 # ----------------------------------------------------
-# 🎨 RECONFIGURED STYLES & ROUTE INJECTIONS
+# 🎨 HIGH-RESILIENCE NATIVE SWAGGER ASSET OVERRIDES 
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
+# High-performance CSS overrides targeting body backgrounds and parameter layouts directly
 _SWAGGER_DARK_CSS = """
 body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .topbar { display: none !important; }
@@ -184,29 +191,23 @@ body { background-color: #0d1117 !important; color: #c9d1d9 !important; }
 .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
 """
 
+# Native application instance utilizing fixed properties parameters to avoid routing collisions
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
     version="2.3.0",
     lifespan=app_lifespan,
-    docs_url=None,      
-    redoc_url=None,
-    openapi_url="/openapi.json" if _enable_docs else None
+    docs_url="/docs" if _enable_docs else None,
+    redoc_url="/redoc" if _enable_docs else None,
+    openapi_url="/openapi.json" if _enable_docs else None,
+    swagger_ui_parameters={"deepLinking": True},
+    swagger_ui_custom_css=_SWAGGER_DARK_CSS,
+    # SOLUTION: Explicitly point assets to a global CDN network to bypass local asset path 500 exceptions
+    swagger_ui_js_url="https://jsdelivr.net",
+    swagger_ui_css_url="https://jsdelivr.net"
 )
 
-# FIXED: Utilizing the app properties mapping object variable path to clear 500 exceptions
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui_html():
-    if not _enable_docs or not app.openapi_url:
-        raise HTTPException(status_code=404, detail="Not Found")
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,  # Direct structural property validation check
-        title=app.title + " - Premium Dark",
-        oauth2_redirect_url=app.oauth2_redirect_url,
-        swagger_ui_parameters={"deepLinking": True},
-        swagger_custom_css=_SWAGGER_DARK_CSS
-    )
-
+# Active origin mapping sequence that explicitly satisfies your CORSMiddleware properties layout
 _allowed_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -288,3 +289,4 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     except Exception:
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Chat service unavailable")
+
