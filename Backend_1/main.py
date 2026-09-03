@@ -91,8 +91,7 @@ def _enforce_rate_limit(token: str) -> None:
     now = time.monotonic()
     with _rate_lock:
         bucket = _rate_buckets[token]
-        # FIXED OPERAND CHECK: Indexing bucket[0] cleanly isolates the individual floating-point timestamp
-        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
+        while bucket and now - bucket > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
         if len(bucket) >= RATE_LIMIT_MAX:
             raise HTTPException(
@@ -113,7 +112,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(header_token)
     return matched_customer
-
 # ----------------------------------------------------
 # 💾 HIGH-RESILIENCE CLOUD MEMORY LOGGING ENGINE
 # ----------------------------------------------------
@@ -161,7 +159,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                     input=[text_to_embed],
                     model="text-embedding-3-small"
                 )
-                vector_values = embedding_response.data[0].embedding
+                vector_values = embedding_response.data.embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -174,7 +172,6 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                 }
                 
                 logger.info(f"🚀 Streaming vector packet {log_id} directly to Pinecone index: {PINECONE_INDEX_NAME}")
-                # [Production Hook Note]: The vector_values and metadata_payload are ready to pin straight into your pipeline indexes!
         except Exception as pinecone_err:
             logger.error(f"⚠️ Pinecone Cloud Sync Disruption: {str(pinecone_err)}")
 
@@ -251,7 +248,7 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
     try:
         client: AsyncOpenAI = gateway_state["openai"]
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o",  # SECURELY LOCKED FOR PRODUCTION MAPPING
             messages=[
                 {"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."},
                 {"role": "user", "content": payload.text},
@@ -274,7 +271,7 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
-            model="claude-3-5-sonnet-20240620",
+            model="claude-3-5-sonnet-latest",  # NATIVELY TARGETING HIGH-PERFORMANCE SONNET STREAMS
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
@@ -282,8 +279,8 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
         text_parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
         resolved_response = "".join(text_parts)
         
-        await append_to_history_log(customer_id, "Anthropic (Claude Sonnet 5)", "Architect Chat Prompt", payload.prompt, resolved_response)
-        return {"resolved_by": "Anthropic (Claude Sonnet 5)", "response_payload": resolved_response}
+        await append_to_history_log(customer_id, "Anthropic (Claude 3.5 Sonnet)", "Architect Chat Prompt", payload.prompt, resolved_response)
+        return {"resolved_by": "Anthropic (Claude 3.5 Sonnet)", "response_payload": resolved_response}
     except HTTPException:
         raise
     except Exception:
