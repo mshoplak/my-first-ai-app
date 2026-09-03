@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
+from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html  # <-- Added to customize UI layers
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
@@ -160,7 +161,8 @@ app = FastAPI(
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
-@app.get("/docs", include_in_schema=False)
+# FIXED: Added response_class=HTMLResponse parameter straight to the route gate
+@app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
 async def custom_swagger_ui_html():
     if not _enable_docs:
         raise HTTPException(status_code=404, detail="Not Found")
@@ -202,9 +204,32 @@ async def custom_swagger_ui_html():
     .swagger-ui .modal-ux-header .modal-ux-header-title h3 { color: #f0f6fc !important; }
     .swagger-ui .modal-ux-content h4 { color: #8b949e !important; }
     """
-    
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=app.title + " - Premium Dark",
-        swagger_custom_css=custom_css
-    )
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <link rel="stylesheet" type="text/css" href="https://jsdelivr.net">
+    <title>Expat AI Advanced Enterprise Gateway - Premium Dark</title>
+    <style>{custom_css}</style>
+    </head>
+    <body>
+    <div id="swagger-ui"></div>
+    <script src="https://jsdelivr.net"></script>
+    <script>
+        const ui = SwaggerUIBundle({{
+            url: '/openapi.json',
+            dom_id: '#swagger-ui',
+            presets: [
+                SwaggerUIBundle.presets.apis
+            ],
+            layout: "BaseLayout",
+            deepLinking: true,
+            showExtensions: true,
+            showCommonExtensions: true
+        }});
+    </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
