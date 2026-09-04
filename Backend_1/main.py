@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import Lock
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi import Depends, FastAPI, HTTPException, Security, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from openai import AsyncOpenAI
@@ -238,16 +238,13 @@ class TranslationRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=8000)
     target_language: str = Field(..., min_length=2, max_length=32)
 
-    @field_validator("target_language")
-    @classmethod
-    def language_must_be_allowed(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in ALLOWED_LANGUAGES:
-            raise ValueError("Unsupported target_language.")
-        return normalized
-
 class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
+
+# ──> PASTE THE MISSING MODEL DIRECTLY HERE:
+class LogSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+    top_k: int = Field(5, ge=1, le=20)
 
 # ----------------------------------------------------
 # 📡 ROUTING ENDPOINTS & MONITORING TELEMENTRY
