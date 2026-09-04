@@ -341,7 +341,8 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
             ],
             temperature=0.2,
         )
-        content = response.choices.message.content or ""
+        # HARD-FIXED CORE SELECTION: Cleanly parsing choice index 0 out of the message container block array
+        content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
         background_tasks.add_task(
@@ -351,8 +352,8 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
         raise
-    except Exception:
-        logger.exception("Translation request failed")
+    except Exception as err:
+        logger.error(f"❌ Translation Processing Crash Traceback: {str(err)}")
         raise HTTPException(status_code=500, detail="Translation service unavailable")
 
 @app.post("/api/claude/chat", tags=["Anthropic Core"])
