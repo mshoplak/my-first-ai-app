@@ -250,14 +250,63 @@ class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
 
 # ----------------------------------------------------
-# ROUTING ENDPOINTS
+# 📡 ROUTING ENDPOINTS & MONITORING TELEMENTRY
 # ----------------------------------------------------
-@app.get("/health", tags=["Monitoring"])
-async def system_health_check():
-    return {"status": "healthy"}
+
+@app.get("/health/deep", tags=["Monitoring"])
+async def deep_health_check():
+    """
+    Deep Health Check: Actively probes reachability to OpenAI, Anthropic, and Pinecone networks.
+    """
+    checks = {}
+    
+    # 1. Probe OpenAI Connection
+    try:
+        openai_client = gateway_state.get("openai")
+        if openai_client:
+            await openai_client.models.list(timeout=5.0)
+            checks["openai"] = "ok"
+        else:
+            checks["openai"] = "offline_pool"
+    except Exception as err:
+        logger.error(f"📡 Deep Probe Fault - OpenAI: {str(err)}")
+        checks["openai"] = "unreachable"
+
+    # 2. Probe Anthropic Connection
+    try:
+        anthropic_client = gateway_state.get("anthropic")
+        if anthropic_client:
+            await anthropic_client.models.list(timeout=5.0)
+            checks["anthropic"] = "ok"
+        else:
+            checks["anthropic"] = "offline_pool"
+    except Exception as err:
+        logger.error(f"📡 Deep Probe Fault - Anthropic: {str(err)}")
+        checks["anthropic"] = "unreachable"
+
+    # 3. Probe Pinecone Connection
+    try:
+        pc_client = gateway_state.get("pinecone")
+        if pc_client:
+            pc_client.describe_index(PINECONE_INDEX_NAME)
+            checks["pinecone"] = "ok"
+        else:
+            checks["pinecone"] = "offline_pool"
+    except Exception as err:
+        logger.error(f"📡 Deep Probe Fault - Pinecone: {str(err)}")
+        checks["pinecone"] = "unreachable"
+
+    # Calculate global structural status
+    is_degraded = any(status in {"unreachable", "offline_pool"} for status in checks.values())
+    
+    return {
+        "status": "degraded" if is_degraded else "healthy",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "checks": checks
+    }
 
 @app.post("/api/translate", tags=["OpenAI Core"])
-async def optimized_translation(payload: TranslationRequest, customer_id: str = Depends(validate_gateway_token)):
+async def optimized_translation(payload: TranslationRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
     try:
         client: AsyncOpenAI = gateway_state["openai"]
         response = await client.chat.completions.create(
@@ -271,7 +320,10 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
-        await append_to_history_log(customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output)
+        background_tasks.add_task(
+            append_to_history_log, 
+            customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output
+        )
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
         raise
@@ -279,8 +331,9 @@ async def optimized_translation(payload: TranslationRequest, customer_id: str = 
         logger.exception("Translation request failed")
         raise HTTPException(status_code=500, detail="Translation service unavailable")
 
+
 @app.post("/api/claude/chat", tags=["Anthropic Core"])
-async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends(validate_gateway_token)):
+async def optimized_claude_chat(payload: ChatRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
     try:
         client: AsyncAnthropic = gateway_state["anthropic"]
         response = await client.messages.create(
@@ -291,7 +344,10 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
         )
         resolved_response = response.content[0].text.strip()
         
-        await append_to_history_log(customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response)
+        background_tasks.add_task(
+            append_to_history_log, 
+            customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response
+        )
         return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
     except HTTPException:
         raise
@@ -299,4 +355,50 @@ async def optimized_claude_chat(payload: ChatRequest, customer_id: str = Depends
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Chat service unavailable")
 
-# Triggering cloud repository sync sequence loop
+
+@app.post("/api/logs/search", tags=["Enterprise Log Retrieval"])
+async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str = Depends(validate_gateway_token)):
+    try:
+        openai_client = gateway_state.get("openai")
+        pc_client = gateway_state.get("pinecone")
+        
+        if not openai_client or not pc_client:
+            raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
+
+        embedding_response = await openai_client.embeddings.create(
+            input=[payload.query],
+            model="text-embedding-3-large",
+            dimensions=2048
+        )
+        query_vector = embedding_response.data[0].embedding
+        
+        current_namespace = datetime.now().strftime("logs-%Y-%m")
+        index_target = pc_client.Index(PINECONE_INDEX_NAME)
+        
+        search_results = index_target.query(
+            vector=query_vector,
+            top_k=payload.top_k,
+            include_metadata=True,
+            namespace=current_namespace,
+            filter={"customer_id": {"$eq": customer_id}}
+        )
+        
+        parsed_logs = []
+        for match in search_results.get("matches", []):
+            parsed_logs.append({
+                "log_id": match.get("id"),
+                "similarity_score": round(match.get("score", 0), 4),
+                "data_payload": match.get("metadata", {})
+            })
+            
+        return {
+            "search_query": payload.query,
+            "partition_scanned": current_namespace,
+            "records_found_count": len(parsed_logs),
+            "results": parsed_logs
+        }
+    except HTTPException:
+        raise
+    except Exception as err:
+        logger.error(f"⚠️ Search Fault Error: {str(err)}")
+        raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
