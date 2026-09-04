@@ -93,17 +93,31 @@ ALLOWED_LANGUAGES = frozenset(
 )
 
 def _enforce_rate_limit(token: str) -> None:
+    """
+    High-Resilience Multi-Tenant Rate Limiter: Incorporates an active memory eviction
+    sweep to prune stale client tracking queues from server RAM dynamically.
+    """
     now = time.monotonic()
     with _rate_lock:
-        stale_tokens = [k for k, v in _rate_buckets.items() if v and (now - v[-1]) > RATE_LIMIT_WINDOW_SEC * 2]
+        # 1. EVICTION PASS: Scan and prune stale token queues to prevent RAM memory leaks
+        stale_tokens = [
+            k for k, v in _rate_buckets.items() 
+            if v and (now - v[-1]) > RATE_LIMIT_WINDOW_SEC * 2
+        ]
         for k in stale_tokens:
             del _rate_buckets[k]
 
+        # 2. STANDARD RATE CHECK: Enforce active sliding window limitations
         bucket = _rate_buckets[token]
-        while bucket and (now - bucket) > RATE_LIMIT_WINDOW_SEC:
+        # FIXED CRITICAL ARRAY INDEX: Added bracket 0 to grab the absolute float inside the deque
+        while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
+            
         if len(bucket) >= RATE_LIMIT_MAX:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+            raise HTTPException(
+                status_code=429, 
+                detail="Rate limit exceeded. Try again later."
+            )
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
