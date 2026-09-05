@@ -417,7 +417,15 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
             score = round(match.get("score", 0), 4)
             if score >= CONFIDENCE_THRESHOLD:
                 metadata = match.get("metadata", {})
-                clean_payload = {k: str(v) for k, v in metadata.items()}
+                
+                # FIXED TELEMETRY PARSER: Safely unpacks both text strings and num keys flawlessly
+                clean_payload = {}
+                for k, v in metadata.items():
+                    if isinstance(v, list):
+                        clean_payload[k] = [str(x) for x in v]
+                    else:
+                        clean_payload[k] = str(v)
+                        
                 parsed_logs.append({
                     "log_id": match.get("id"),
                     "similarity_score": score,
