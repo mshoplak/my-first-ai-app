@@ -410,7 +410,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
             namespace=current_namespace, filter={"customer_id": {"$eq": customer_id}}
         )
         
-        CONFIDENCE_THRESHOLD = 0.50
+        CONFIDENCE_THRESHOLD = 0.10
         parsed_logs = []
         
         for match in search_results.get("matches", []):
