@@ -104,16 +104,21 @@ def _enforce_rate_limit(token: str) -> None:
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
     matched_customer = None
+    # Strip any potential whitespace characters from the incoming request token header
+    clean_header_token = header_token.strip()
+    
     for secure_token, customer_id in CUSTOMER_KEYS.items():
-        if secrets.compare_digest(header_token, secure_token):
-            matched_customer = customer_id
+        if secrets.compare_digest(clean_header_token, secure_token.strip()):
+            # Hard-sanitize the customer ID string to wipe out empty spacing anomalies permanently
+            matched_customer = customer_id.strip()
             break
             
     if not matched_customer:
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
         
-    _enforce_rate_limit(header_token)
+    _enforce_rate_limit(clean_header_token)
     return matched_customer
+
 # ----------------------------------------------------
 # 📝 PYDANTIC INTERFACES & SCHEMAS
 # ----------------------------------------------------
