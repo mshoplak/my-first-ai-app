@@ -437,3 +437,26 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
     except Exception as err:
         logger.error(f"⚠️ Search Fault Error: {str(err)}")
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
+    @app.post("/api/logs/maintenance/clear-index-cache", tags=["Enterprise Log Management"])
+async def force_clean_index_flush(customer_id: str = Depends(validate_gateway_token)):
+    """
+    Emergency Index Maintenance: Directly flushes the default global namespace 
+    to clear out mismatched data fragments on the Pinecone web console grid.
+    """
+    try:
+        pc_client = gateway_state.get("pinecone")
+        if pc_client:
+            index_target = pc_client.Index(PINECONE_INDEX_NAME)
+            
+            # 1. Wipes old testing artifacts completely out of the default global namespace
+            index_target.delete(delete_all=True, namespace="")
+            
+            # 2. Refreshes the active monthly bucket
+            current_namespace = datetime.now().strftime("logs-%Y-%m")
+            
+            return {
+                "status": "success",
+                "message": f"Global default cache namespace flushed cleanly. Active monthly partition '{current_namespace}' preserved."
+            }
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"Maintenance execution interrupted: {str(err)}")
