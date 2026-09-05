@@ -300,7 +300,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
             raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
 
         embedding_response = await openai_client.embeddings.create(
-            input=[payload.query], model="text-embedding-3-small", dimensions=1536
+            input=[payload.query], model="text-embedding-3-large", dimensions=2048
         )
         # FIXED PARSING CORE: Added index 0 brackets to extract embedding out of the list array safely
         query_vector = embedding_response.data[0].embedding
@@ -464,7 +464,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
             raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
 
         embedding_response = await openai_client.embeddings.create(
-            input=[payload.query], model="text-embedding-3-small", dimensions=1536
+            input=[payload.query], model="text-embedding-3-large", dimensions=2048
         )
 
         query_vector = embedding_response.data.embedding
