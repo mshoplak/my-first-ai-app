@@ -437,7 +437,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
     except Exception as err:
         logger.error(f"⚠️ Search Fault Error: {str(err)}")
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
-    @app.post("/api/logs/maintenance/clear-index-cache", tags=["Enterprise Log Management"])
+@app.post("/api/logs/maintenance/clear-index-cache", tags=["Enterprise Log Management"])
 async def force_clean_index_flush(customer_id: str = Depends(validate_gateway_token)):
     """
     Emergency Index Maintenance: Directly flushes the default global namespace 
