@@ -347,7 +347,8 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
             ],
             temperature=0.2,
         )
-        content = response.choices.message.content or ""
+        # FIXED PARSING CORE: Added index 0 brackets to extract the choice cleanly from the list array
+        content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
         usage = response.usage
@@ -376,7 +377,8 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        resolved_response = response.content.text
+        # FIXED PARSING CORE: Added index 0 brackets to extract the text block out of the content list array safely
+        resolved_response = response.content[0].text.strip()
         
         usage = response.usage
         p_tok = usage.input_tokens if usage else 0
