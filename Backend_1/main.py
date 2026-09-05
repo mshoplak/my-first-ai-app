@@ -62,13 +62,7 @@ if raw_keys_string:
             token, client_name = clean_pair.split(":", 1)
             CUSTOMER_KEYS[token.strip()] = client_name.strip()
 
-_missing = [
-    name for name, value in (
-        ("OPENAI_API_KEY", OPENAI_API_KEY),
-        ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
-        ("PINECONE_API_KEY", PINECONE_API_KEY),
-    ) if not value
-]
+_missing = [name for name, value in (("OPENAI_API_KEY", OPENAI_API_KEY), ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY), ("PINECONE_API_KEY", PINECONE_API_KEY)) if not value]
 
 if _missing or not CUSTOMER_KEYS:
     logger.error(f"❌ CONFIGURATION ERROR: Missing system environment properties -> {_missing}")
@@ -77,47 +71,35 @@ if _missing or not CUSTOMER_KEYS:
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
+# ----------------------------------------------------
+# 💰 ENTERPRISE MODEL METRIC COST MATRICES (Per 1M Tokens)
+# ----------------------------------------------------
+MODEL_PRICING = {
+    "openai-gpt-4o": {"input": 2.50, "output": 10.00},
+    "anthropic-sonnet": {"input": 3.00, "output": 15.00}
+}
+
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = Lock()
 
 ALLOWED_LANGUAGES = frozenset(
-    {
-        "arabic", "bengali", "chinese", "czech", "danish", "dutch", "english",
-        "finnish", "french", "german", "greek", "hebrew", "hindi", "hungarian",
-        "indonesian", "italian", "japanese", "korean", "malay", "norwegian",
-        "polish", "portuguese", "romanian", "russian", "spanish", "swedish",
-        "thai", "turkish", "ukrainian", "urdu", "vietnamese",
-    }
+    {"arabic", "bengali", "chinese", "czech", "danish", "dutch", "english", "finnish", "french", "german", "greek", "hebrew", "hindi", "hungarian", "indonesian", "italian", "japanese", "korean", "malay", "norwegian", "polish", "portuguese", "romanian", "russian", "spanish", "swedish", "thai", "turkish", "ukrainian", "urdu", "vietnamese"}
 )
 
 def _enforce_rate_limit(token: str) -> None:
-    """
-    High-Resilience Multi-Tenant Rate Limiter: Incorporates an active memory eviction
-    sweep to prune stale client tracking queues from server RAM dynamically.
-    """
     now = time.monotonic()
     with _rate_lock:
-        # 1. EVICTION PASS: Scan and prune stale token queues to prevent RAM memory leaks
-        stale_tokens = [
-            k for k, v in _rate_buckets.items() 
-            if v and (now - v[-1]) > RATE_LIMIT_WINDOW_SEC * 2
-        ]
+        stale_tokens = [k for k, v in _rate_buckets.items() if v and (now - v[-1]) > RATE_LIMIT_WINDOW_SEC * 2]
         for k in stale_tokens:
             del _rate_buckets[k]
 
-        # 2. STANDARD RATE CHECK: Enforce active sliding window limitations
         bucket = _rate_buckets[token]
-        # FIXED CRITICAL ARRAY INDEX: Added bracket 0 to grab the absolute float inside the deque
         while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
             bucket.popleft()
-            
         if len(bucket) >= RATE_LIMIT_MAX:
-            raise HTTPException(
-                status_code=429, 
-                detail="Rate limit exceeded. Try again later."
-            )
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
@@ -180,7 +162,7 @@ _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lo
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
-    version="2.6.0",
+    version="2.8.0",
     lifespan=app_lifespan,
     docs_url="/docs" if _enable_docs else None,
     redoc_url="/redoc" if _enable_docs else None,
@@ -213,7 +195,7 @@ async def enforce_production_ssl_proxy(request: Request, call_next):
         )
     return await call_next(request)
 # ----------------------------------------------------
-# 💾 HIGH-RESILIENCE BACKGROUND LOGGING ENGINE
+# 💾 TELEMETRY LOGGING ENGINE & BILLING COMPUTATION
 # ----------------------------------------------------
 def sanitize_for_csv(text: str) -> str:
     if not text:
@@ -222,14 +204,28 @@ def sanitize_for_csv(text: str) -> str:
         return f"'{text}"
     return text
 
-async def append_to_history_log(customer_id: str, engine_name: str, task_type: str, user_input: str, ai_output: str) -> None:
+async def append_to_history_log(
+    customer_id: str, engine_name: str, task_type: str, 
+    user_input: str, ai_output: str, 
+    prompt_tokens: int = 0, completion_tokens: int = 0, pricing_key: str = None
+) -> None:
     """
-    Background Task Routine: Simultaneously writes local CSV audits while 
-    streaming 2048 vector embeddings to partitioned Pinecone Cloud namespaces.
+    Background Task Routine: Computes dollar token consumption pricing, writes local 
+    CSV audits, and streams complete metrics directly to partitioned Pinecone clusters.
     """
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clean_input = sanitize_for_csv(user_input)[:1000]
     clean_output = sanitize_for_csv(ai_output)[:2000]
+
+    input_cost = 0.0
+    output_cost = 0.0
+    total_cost = 0.0
+
+    if pricing_key and pricing_key in MODEL_PRICING:
+        rates = MODEL_PRICING[pricing_key]
+        input_cost = (prompt_tokens / 1000000.0) * rates["input"]
+        output_cost = (completion_tokens / 1000000.0) * rates["output"]
+        total_cost = round(input_cost + output_cost, 6)
 
     if os.getenv("ENABLE_HISTORY_LOGGING", "false").lower() in ("true", "1"):
         try:
@@ -239,8 +235,8 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                     with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
                         writer = csv.writer(csv_file)
                         if not file_exists:
-                            writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response"])
-                        writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output])
+                            writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response", "Total Cost ($)"])
+                        writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, f"${total_cost:.6f}"])
         except Exception as log_err:
             logger.error(f"⚠️ CSV Log Fault: {str(log_err)}")
 
@@ -257,8 +253,7 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                     model="text-embedding-3-large",
                     dimensions=2048
                 )
-                # FIXED EMBEDDING ARRAYS: Safely extracts coordinates from data index 0 to clear out internal list errors
-                vector_values = embedding_response.data[0].embedding
+                vector_values = embedding_response.data.embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -267,29 +262,26 @@ async def append_to_history_log(customer_id: str, engine_name: str, task_type: s
                     "engine": engine_name,
                     "mode": task_type,
                     "input_text": clean_input,
-                    "output_text": clean_output
+                    "output_text": clean_output,
+                    "prompt_tokens": str(prompt_tokens),
+                    "completion_tokens": str(completion_tokens),
+                    "total_tokens": str(prompt_tokens + completion_tokens),
+                    "estimated_cost_usd": str(total_cost)
                 }
                 
                 current_namespace = datetime.now().strftime("logs-%Y-%m")
-                logger.info(f"🚀 [Background Task] Dispatching vector packet {log_id} to Pinecone index: {PINECONE_INDEX_NAME} (Namespace: {current_namespace})")
+                logger.info(f"🚀 [Background Task] Dispatching cost-tracked vector packet {log_id} to Pinecone index: {PINECONE_INDEX_NAME} (Namespace: {current_namespace})")
                 
                 index_target = pc_client.Index(PINECONE_INDEX_NAME)
                 async_result = index_target.upsert(
-                    vectors=[
-                        {
-                            "id": log_id,
-                            "values": vector_values,
-                            "metadata": metadata_payload
-                        }
-                    ],
+                    vectors=[{"id": log_id, "values": vector_values, "metadata": metadata_payload}],
                     namespace=current_namespace,
                     async_req=True
                 )
                 async_result.get()
-                logger.info(f"✅ [Background Task] Vector transaction successfully committed inside {PINECONE_INDEX_NAME} namespace: {current_namespace}")
+                logger.info(f"✅ [Background Task] Vector transaction successfully committed inside namespace: {current_namespace}")
         except Exception as pinecone_err:
             logger.error(f"⚠️ Pinecone Background Task Sync Disruption: {str(pinecone_err)}")
-
 # ----------------------------------------------------
 # 📡 ROUTING ENDPOINTS & MONITORING TELEMETRY
 # ----------------------------------------------------
@@ -300,7 +292,6 @@ async def system_health_check():
 @app.get("/health/deep", tags=["Monitoring"])
 async def deep_health_check():
     checks = {}
-    
     try:
         openai_client = gateway_state.get("openai")
         if openai_client:
@@ -315,12 +306,9 @@ async def deep_health_check():
     try:
         anthropic_client = gateway_state.get("anthropic")
         if anthropic_client:
-            # FIXED TELEMETRY PROBE: Anthropic uses raw un-mapped client timeouts to check connection paths
             await anthropic_client.messages.create(
-                model=ANTHROPIC_MODEL_NAME,
-                max_tokens=1,
-                messages=[{"role": "user", "content": "ping"}],
-                timeout=5.0
+                model=ANTHROPIC_MODEL_NAME, max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}], timeout=5.0
             )
             checks["anthropic"] = "ok"
         else:
@@ -341,38 +329,11 @@ async def deep_health_check():
         checks["pinecone"] = "unreachable"
 
     is_degraded = any(status in {"unreachable", "offline_pool"} for status in checks.values())
-    
     return {
         "status": "degraded" if is_degraded else "healthy",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "checks": checks
     }
-
-
-@app.post("/api/claude/chat", tags=["Anthropic Core"])
-async def optimized_claude_chat(payload: ChatRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
-    try:
-        client: AsyncAnthropic = gateway_state["anthropic"]
-        response = await client.messages.create(
-            model=ANTHROPIC_MODEL_NAME,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": payload.prompt}],
-            system="You are an advanced software architect AI. Provide concise answers.",
-        )
-        # FIXED PARSING CORE: Securely extracts string text fields from modern Anthropic content blocks
-        resolved_response = response.content[0].text
-        
-        background_tasks.add_task(
-            append_to_history_log, 
-            customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response
-        )
-        return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Chat request failed")
-        raise HTTPException(status_code=500, detail="Chat service unavailable")
-
 
 @app.post("/api/translate", tags=["OpenAI Core"])
 async def optimized_translation(payload: TranslationRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
@@ -386,12 +347,17 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
             ],
             temperature=0.2,
         )
-        content = response.choices[0].message.content or ""
+        content = response.choices.message.content or ""
         transformed_output = content.strip()
+        
+        usage = response.usage
+        p_tok = usage.prompt_tokens if usage else 0
+        c_tok = usage.completion_tokens if usage else 0
         
         background_tasks.add_task(
             append_to_history_log, 
-            customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", payload.text, transformed_output
+            customer_id, "OpenAI (gpt-4o)", f"Translation ({payload.target_language})", 
+            payload.text, transformed_output, p_tok, c_tok, "openai-gpt-4o"
         )
         return {"resolved_by": "OpenAI (gpt-4o)", "transformed_text": transformed_output}
     except HTTPException:
@@ -410,11 +376,16 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        resolved_response = response.content[0].text.strip()
+        resolved_response = response.content.text
+        
+        usage = response.usage
+        p_tok = usage.input_tokens if usage else 0
+        c_tok = usage.output_tokens if usage else 0
         
         background_tasks.add_task(
             append_to_history_log, 
-            customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response
+            customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", 
+            payload.prompt, resolved_response, p_tok, c_tok, "anthropic-sonnet"
         )
         return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
     except HTTPException:
@@ -433,34 +404,36 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
             raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
 
         embedding_response = await openai_client.embeddings.create(
-            input=[payload.query],
-            model="text-embedding-3-large",
-            dimensions=2048
+            input=[payload.query], model="text-embedding-3-large", dimensions=2048
         )
-        query_vector = embedding_response.data[0].embedding
+        query_vector = embedding_response.data.embedding
         
         current_namespace = datetime.now().strftime("logs-%Y-%m")
         index_target = pc_client.Index(PINECONE_INDEX_NAME)
         
         search_results = index_target.query(
-            vector=query_vector,
-            top_k=payload.top_k,
-            include_metadata=True,
-            namespace=current_namespace,
-            filter={"customer_id": {"$eq": customer_id}}
+            vector=query_vector, top_k=payload.top_k, include_metadata=True,
+            namespace=current_namespace, filter={"customer_id": {"$eq": customer_id}}
         )
         
+        CONFIDENCE_THRESHOLD = 0.70
         parsed_logs = []
+        
         for match in search_results.get("matches", []):
-            parsed_logs.append({
-                "log_id": match.get("id"),
-                "similarity_score": round(match.get("score", 0), 4),
-                "data_payload": match.get("metadata", {})
-            })
+            score = round(match.get("score", 0), 4)
+            if score >= CONFIDENCE_THRESHOLD:
+                metadata = match.get("metadata", {})
+                clean_payload = {k: str(v) for k, v in metadata.items()}
+                parsed_logs.append({
+                    "log_id": match.get("id"),
+                    "similarity_score": score,
+                    "data_payload": clean_payload
+                })
             
         return {
             "search_query": payload.query,
             "partition_scanned": current_namespace,
+            "confidence_threshold_applied": CONFIDENCE_THRESHOLD,
             "records_found_count": len(parsed_logs),
             "results": parsed_logs
         }
@@ -469,26 +442,3 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
     except Exception as err:
         logger.error(f"⚠️ Search Fault Error: {str(err)}")
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
-@app.post("/api/logs/maintenance/clear-index-cache", tags=["Enterprise Log Management"])
-async def force_clean_index_flush(customer_id: str = Depends(validate_gateway_token)):
-    """
-    Emergency Index Maintenance: Directly flushes the default global namespace 
-    to clear out mismatched data fragments on the Pinecone web console grid.
-    """
-    try:
-        pc_client = gateway_state.get("pinecone")
-        if pc_client:
-            index_target = pc_client.Index(PINECONE_INDEX_NAME)
-            
-            # 1. Wipes old testing artifacts completely out of the default global namespace
-            index_target.delete(delete_all=True, namespace="")
-            
-            # 2. Refreshes the active monthly bucket
-            current_namespace = datetime.now().strftime("logs-%Y-%m")
-            
-            return {
-                "status": "success",
-                "message": f"Global default cache namespace flushed cleanly. Active monthly partition '{current_namespace}' preserved."
-            }
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Maintenance execution interrupted: {str(err)}")
