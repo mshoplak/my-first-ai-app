@@ -255,8 +255,8 @@ async def append_to_history_log(
                 
                 embedding_response = await openai_client.embeddings.create(
                     input=[text_to_embed],
-                    model="text-embedding-3-large",
-                    dimensions=2048
+                    model="text-embedding-3-small",
+                    dimensions=1536
                 )
                 # FIXED PARSING CORE: Added index 0 brackets to extract embedding out of the list array safely
                 vector_values = embedding_response.data[0].embedding
@@ -464,8 +464,9 @@ async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str =
             raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
 
         embedding_response = await openai_client.embeddings.create(
-            input=[payload.query], model="text-embedding-3-large", dimensions=2048
+            input=[payload.query], model="text-embedding-3-small", dimensions=1536
         )
+
         query_vector = embedding_response.data.embedding
         
         current_namespace = datetime.now().strftime("logs-%Y-%m")
