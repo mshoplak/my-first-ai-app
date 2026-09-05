@@ -315,7 +315,13 @@ async def deep_health_check():
     try:
         anthropic_client = gateway_state.get("anthropic")
         if anthropic_client:
-            await anthropic_client.models.list(timeout=5.0)
+            # FIXED TELEMETRY PROBE: Anthropic uses raw un-mapped client timeouts to check connection paths
+            await anthropic_client.messages.create(
+                model=ANTHROPIC_MODEL_NAME,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+                timeout=5.0
+            )
             checks["anthropic"] = "ok"
         else:
             checks["anthropic"] = "offline_pool"
@@ -341,6 +347,32 @@ async def deep_health_check():
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "checks": checks
     }
+
+
+@app.post("/api/claude/chat", tags=["Anthropic Core"])
+async def optimized_claude_chat(payload: ChatRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
+    try:
+        client: AsyncAnthropic = gateway_state["anthropic"]
+        response = await client.messages.create(
+            model=ANTHROPIC_MODEL_NAME,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": payload.prompt}],
+            system="You are an advanced software architect AI. Provide concise answers.",
+        )
+        # FIXED PARSING CORE: Securely extracts string text fields from modern Anthropic content blocks
+        resolved_response = response.content[0].text
+        
+        background_tasks.add_task(
+            append_to_history_log, 
+            customer_id, f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", payload.prompt, resolved_response
+        )
+        return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Chat request failed")
+        raise HTTPException(status_code=500, detail="Chat service unavailable")
+
 
 @app.post("/api/translate", tags=["OpenAI Core"])
 async def optimized_translation(payload: TranslationRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
