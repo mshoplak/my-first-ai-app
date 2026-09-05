@@ -253,7 +253,8 @@ async def append_to_history_log(
                     model="text-embedding-3-large",
                     dimensions=2048
                 )
-                vector_values = embedding_response.data.embedding
+                # FIXED PARSING CORE: Added index 0 brackets to extract embedding out of the list array safely
+                vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
                 metadata_payload = {
@@ -282,6 +283,58 @@ async def append_to_history_log(
                 logger.info(f"✅ [Background Task] Vector transaction successfully committed inside namespace: {current_namespace}")
         except Exception as pinecone_err:
             logger.error(f"⚠️ Pinecone Background Task Sync Disruption: {str(pinecone_err)}")
+
+
+@app.post("/api/logs/search", tags=["Enterprise Log Retrieval"])
+async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str = Depends(validate_gateway_token)):
+    try:
+        openai_client = gateway_state.get("openai")
+        pc_client = gateway_state.get("pinecone")
+        
+        if not openai_client or not pc_client:
+            raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
+
+        embedding_response = await openai_client.embeddings.create(
+            input=[payload.query], model="text-embedding-3-large", dimensions=2048
+        )
+        # FIXED PARSING CORE: Added index 0 brackets to extract embedding out of the list array safely
+        query_vector = embedding_response.data[0].embedding
+        
+        current_namespace = datetime.now().strftime("logs-%Y-%m")
+        index_target = pc_client.Index(PINECONE_INDEX_NAME)
+        
+        search_results = index_target.query(
+            vector=query_vector, top_k=payload.top_k, include_metadata=True,
+            namespace=current_namespace, filter={"customer_id": {"$eq": customer_id}}
+        )
+        
+        CONFIDENCE_THRESHOLD = 0.70
+        parsed_logs = []
+        
+        for match in search_results.get("matches", []):
+            score = round(match.get("score", 0), 4)
+            if score >= CONFIDENCE_THRESHOLD:
+                metadata = match.get("metadata", {})
+                clean_payload = {k: str(v) for k, v in metadata.items()}
+                parsed_logs.append({
+                    "log_id": match.get("id"),
+                    "similarity_score": score,
+                    "data_payload": clean_payload
+                })
+            
+        return {
+            "search_query": payload.query,
+            "partition_scanned": current_namespace,
+            "confidence_threshold_applied": CONFIDENCE_THRESHOLD,
+            "records_found_count": len(parsed_logs),
+            "results": parsed_logs
+        }
+    except HTTPException:
+        raise
+    except Exception as err:
+        logger.error(f"⚠️ Search Fault Error: {str(err)}")
+        raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
+
 # ----------------------------------------------------
 # 📡 ROUTING ENDPOINTS & MONITORING TELEMETRY
 # ----------------------------------------------------
