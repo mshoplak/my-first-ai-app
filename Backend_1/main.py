@@ -19,14 +19,13 @@ from pinecone import Pinecone
 from pydantic import BaseModel, Field, field_validator
 
 # ----------------------------------------------------
-# 🌍 HIGH-RESILIENCE ENVIRONMENT SETUP
+# 🌍 ENVIRONMENT SETUP & SECURITY INITIALIZATION
 # ----------------------------------------------------
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
     _LOCAL_REPO_PARENT = Path(__file__).resolve().parent.parent / ".env"
     _LOCAL_CURRENT_CWD = Path(".").resolve() / ".env"
-    
     if _LOCAL_REPO_PARENT.exists():
         load_dotenv(dotenv_path=_LOCAL_REPO_PARENT)
     elif _LOCAL_CURRENT_CWD.exists():
@@ -35,9 +34,6 @@ if not IS_ON_RENDER:
 APP_ENV = os.getenv("APP_ENV", "development").lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
-# ----------------------------------------------------
-# 🔒 SECURE SYSTEM ENGINE INITIALIZATION
-# ----------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
@@ -51,7 +47,6 @@ _history_file_lock = Lock()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expat-gateway")
 
-# Multi-Tenant Key Mappings
 CUSTOMER_KEYS: dict[str, str] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 
@@ -65,15 +60,12 @@ if raw_keys_string:
 _missing = [name for name, value in (("OPENAI_API_KEY", OPENAI_API_KEY), ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY), ("PINECONE_API_KEY", PINECONE_API_KEY)) if not value]
 
 if _missing or not CUSTOMER_KEYS:
-    logger.error(f"❌ CONFIGURATION ERROR: Missing system environment properties -> {_missing}")
-    raise RuntimeError("CRITICAL ENVIRONMENT ERROR: Server initialization blocked. Check private system logs.")
+    logger.error(f"❌ CONFIGURATION ERROR: Missing properties -> {_missing}")
+    raise RuntimeError("CRITICAL ENVIRONMENT ERROR: Server initialization blocked.")
 
 API_KEY_NAME = "X-Nomad-Gateway-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# ----------------------------------------------------
-# 💰 ENTERPRISE MODEL METRIC COST MATRICES (Per 1M Tokens)
-# ----------------------------------------------------
 MODEL_PRICING = {
     "openai-gpt-4o": {"input": 2.50, "output": 10.00},
     "anthropic-sonnet": {"input": 3.00, "output": 15.00}
@@ -103,13 +95,10 @@ def _enforce_rate_limit(token: str) -> None:
         bucket.append(now)
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)):
-    matched_customer = None
-    # Strip any potential whitespace characters from the incoming request token header
     clean_header_token = header_token.strip()
-    
+    matched_customer = None
     for secure_token, customer_id in CUSTOMER_KEYS.items():
         if secrets.compare_digest(clean_header_token, secure_token.strip()):
-            # Hard-sanitize the customer ID string to wipe out empty spacing anomalies permanently
             matched_customer = customer_id.strip()
             break
             
@@ -118,9 +107,8 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)):
         
     _enforce_rate_limit(clean_header_token)
     return matched_customer
-
 # ----------------------------------------------------
-# 📝 PYDANTIC INTERFACES & SCHEMAS
+# 📝 PYDANTIC DATA VALIDATORS & SCHEMAS
 # ----------------------------------------------------
 class LogSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
@@ -142,32 +130,37 @@ class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
 
 # ----------------------------------------------------
-# 🔌 LIFESPAN CONNECTION POOLS
+# 🔌 THREAD-SAFE CLIENT LAYER LIFESPAN POOLS
 # ----------------------------------------------------
-gateway_state: dict = {}
+openai_pool: AsyncOpenAI = None
+anthropic_pool: AsyncAnthropic = None
+pinecone_pool: Pinecone = None
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    logger.info("Initializing AI and Database client pools with explicit timeouts")
-    gateway_state["openai"] = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=30.0)
-    gateway_state["anthropic"] = AsyncAnthropic(api_key=ANTHROPIC_API_KEY, timeout=30.0)
+    global openai_pool, anthropic_pool, pinecone_pool
+    logger.info("Initializing explicit timeout AI and Database client sockets")
+    
+    openai_pool = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=30.0)
+    anthropic_pool = AsyncAnthropic(api_key=ANTHROPIC_API_KEY, timeout=30.0)
     
     if PINECONE_API_KEY:
-        gateway_state["pinecone"] = Pinecone(api_key=PINECONE_API_KEY)
+        pinecone_pool = Pinecone(api_key=PINECONE_API_KEY)
+        
     yield
-    logger.info("Closing AI client connections")
-    await gateway_state["openai"].close()
-    await gateway_state["anthropic"].close()
+    logger.info("Closing active resource lanes safely")
+    await openai_pool.close()
+    await anthropic_pool.close()
 
 # ----------------------------------------------------
-# 🚀 NATIVE APP MOUNTING & FIREWALL MIDDLEWARE
+# 🛡️ SYSTEM APP AND ROUTING MIDDLEWARE FIREWALLS
 # ----------------------------------------------------
 _enable_docs = os.getenv("ENABLE_DOCS", "false" if IS_PRODUCTION else "true").lower() in {"1", "true", "yes"}
 
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
-    version="2.8.0",
+    version="2.9.0",
     lifespan=app_lifespan,
     docs_url="/docs" if _enable_docs else None,
     redoc_url="/redoc" if _enable_docs else None,
@@ -192,7 +185,6 @@ app.add_middleware(
 @app.middleware("http")
 async def enforce_production_ssl_proxy(request: Request, call_next):
     forwarded_proto = request.headers.get("x-forwarded-proto", "http")
-    
     if IS_ON_RENDER and forwarded_proto == "http" and request.url.path not in {"/health", "/health/deep"}:
         return JSONResponse(
             status_code=400,
@@ -200,7 +192,7 @@ async def enforce_production_ssl_proxy(request: Request, call_next):
         )
     return await call_next(request)
 # ----------------------------------------------------
-# 💾 TELEMETRY LOGGING ENGINE & BILLING COMPUTATION
+# 💾 THREAD-SAFE COMPACT VECTOR LOGGING ENGINE
 # ----------------------------------------------------
 def sanitize_for_csv(text: str) -> str:
     if not text:
@@ -215,8 +207,8 @@ async def append_to_history_log(
     prompt_tokens: int = 0, completion_tokens: int = 0, pricing_key: str = None
 ) -> None:
     """
-    Background Task Routine: Computes dollar token consumption pricing, writes local 
-    CSV audits, and streams complete metrics directly to partitioned Pinecone clusters.
+    Thread-Safe Background Worker: Safely extracts active, validated client sockets 
+    directly from global structures to prevent async execution context drop failures.
     """
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clean_input = sanitize_for_csv(user_input)[:1000]
@@ -232,6 +224,7 @@ async def append_to_history_log(
         output_cost = (completion_tokens / 1000000.0) * rates["output"]
         total_cost = round(input_cost + output_cost, 6)
 
+    # Layer A: Local Spreadsheet Logging Audit
     if os.getenv("ENABLE_HISTORY_LOGGING", "false").lower() in ("true", "1"):
         try:
             if not _HISTORY_LOG_PATH.exists() or _HISTORY_LOG_PATH.stat().st_size <= 10 * 1024 * 1024:
@@ -245,20 +238,18 @@ async def append_to_history_log(
         except Exception as log_err:
             logger.error(f"⚠️ CSV Log Fault: {str(log_err)}")
 
+    # Layer B: Hardened Background Thread Vector Injection Loop (2048 Dimensions)
     if ENABLE_PINECONE_LOGGING and PINECONE_API_KEY:
         try:
-            openai_client = gateway_state.get("openai")
-            pc_client = gateway_state.get("pinecone")
-            
-            if openai_client and pc_client:
+            # DIRECT RESOURCE EXTRACTION: Accessing thread-safe global connection sockets directly
+            if openai_pool and pinecone_pool:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
                 
-                embedding_response = await openai_client.embeddings.create(
+                embedding_response = await openai_pool.embeddings.create(
                     input=[text_to_embed],
-                    model="text-embedding-3-small",
-                    dimensions=1536
+                    model="text-embedding-3-large",
+                    dimensions=2048
                 )
-                # FIXED PARSING CORE: Added index 0 brackets to extract embedding out of the list array safely
                 vector_values = embedding_response.data[0].embedding
                 
                 log_id = f"log_{secrets.token_hex(8)}"
@@ -278,7 +269,7 @@ async def append_to_history_log(
                 current_namespace = datetime.now().strftime("logs-%Y-%m")
                 logger.info(f"🚀 [Background Task] Dispatching cost-tracked vector packet {log_id} to Pinecone index: {PINECONE_INDEX_NAME} (Namespace: {current_namespace})")
                 
-                index_target = pc_client.Index(PINECONE_INDEX_NAME)
+                index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
                 async_result = index_target.upsert(
                     vectors=[{"id": log_id, "values": vector_values, "metadata": metadata_payload}],
                     namespace=current_namespace,
@@ -286,62 +277,12 @@ async def append_to_history_log(
                 )
                 async_result.get()
                 logger.info(f"✅ [Background Task] Vector transaction successfully committed inside namespace: {current_namespace}")
+            else:
+                logger.error("⚠️ Background Task Aborted: Global connection pool elements are uninitialized or offline.")
         except Exception as pinecone_err:
             logger.error(f"⚠️ Pinecone Background Task Sync Disruption: {str(pinecone_err)}")
-
-
-@app.post("/api/logs/search", tags=["Enterprise Log Retrieval"])
-async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str = Depends(validate_gateway_token)):
-    try:
-        openai_client = gateway_state.get("openai")
-        pc_client = gateway_state.get("pinecone")
-        
-        if not openai_client or not pc_client:
-            raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
-
-        embedding_response = await openai_client.embeddings.create(
-            input=[payload.query], model="text-embedding-3-large", dimensions=2048
-        )
-        # FIXED PARSING CORE: Added index 0 brackets to extract embedding out of the list array safely
-        query_vector = embedding_response.data[0].embedding
-        
-        current_namespace = datetime.now().strftime("logs-%Y-%m")
-        index_target = pc_client.Index(PINECONE_INDEX_NAME)
-        
-        search_results = index_target.query(
-            vector=query_vector, top_k=payload.top_k, include_metadata=True,
-            namespace=current_namespace, filter={"customer_id": {"$eq": customer_id}}
-        )
-        
-        CONFIDENCE_THRESHOLD = 0.50
-        parsed_logs = []
-        
-        for match in search_results.get("matches", []):
-            score = round(match.get("score", 0), 4)
-            if score >= CONFIDENCE_THRESHOLD:
-                metadata = match.get("metadata", {})
-                clean_payload = {k: str(v) for k, v in metadata.items()}
-                parsed_logs.append({
-                    "log_id": match.get("id"),
-                    "similarity_score": score,
-                    "data_payload": clean_payload
-                })
-            
-        return {
-            "search_query": payload.query,
-            "partition_scanned": current_namespace,
-            "confidence_threshold_applied": CONFIDENCE_THRESHOLD,
-            "records_found_count": len(parsed_logs),
-            "results": parsed_logs
-        }
-    except HTTPException:
-        raise
-    except Exception as err:
-        logger.error(f"⚠️ Search Fault Error: {str(err)}")
-        raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
-
 # ----------------------------------------------------
-# 📡 ROUTING ENDPOINTS & MONITORING TELEMETRY
+# 📡 SYSTEM ROUTING ENDPOINTS & MONITORING
 # ----------------------------------------------------
 @app.get("/health", tags=["Monitoring"])
 async def system_health_check():
@@ -351,9 +292,8 @@ async def system_health_check():
 async def deep_health_check():
     checks = {}
     try:
-        openai_client = gateway_state.get("openai")
-        if openai_client:
-            await openai_client.models.list(timeout=5.0)
+        if openai_pool:
+            await openai_pool.models.list(timeout=5.0)
             checks["openai"] = "ok"
         else:
             checks["openai"] = "offline_pool"
@@ -362,9 +302,8 @@ async def deep_health_check():
         checks["openai"] = "unreachable"
 
     try:
-        anthropic_client = gateway_state.get("anthropic")
-        if anthropic_client:
-            await anthropic_client.messages.create(
+        if anthropic_pool:
+            await anthropic_pool.messages.create(
                 model=ANTHROPIC_MODEL_NAME, max_tokens=1,
                 messages=[{"role": "user", "content": "ping"}], timeout=5.0
             )
@@ -376,9 +315,8 @@ async def deep_health_check():
         checks["anthropic"] = "unreachable"
 
     try:
-        pc_client = gateway_state.get("pinecone")
-        if pc_client:
-            pc_client.describe_index(PINECONE_INDEX_NAME)
+        if pinecone_pool:
+            pinecone_pool.describe_index(PINECONE_INDEX_NAME)
             checks["pinecone"] = "ok"
         else:
             checks["pinecone"] = "offline_pool"
@@ -395,9 +333,10 @@ async def deep_health_check():
 
 @app.post("/api/translate", tags=["OpenAI Core"])
 async def optimized_translation(payload: TranslationRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
+    if not openai_pool:
+        raise HTTPException(status_code=503, detail="OpenAI client pool uninitialized")
     try:
-        client: AsyncOpenAI = gateway_state["openai"]
-        response = await client.chat.completions.create(
+        response = await openai_pool.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."},
@@ -405,7 +344,6 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
             ],
             temperature=0.2,
         )
-        # FIXED PARSING CORE: Added index 0 brackets to extract the choice cleanly from the list array
         content = response.choices[0].message.content or ""
         transformed_output = content.strip()
         
@@ -427,15 +365,15 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
 
 @app.post("/api/claude/chat", tags=["Anthropic Core"])
 async def optimized_claude_chat(payload: ChatRequest, background_tasks: BackgroundTasks, customer_id: str = Depends(validate_gateway_token)):
+    if not anthropic_pool:
+        raise HTTPException(status_code=503, detail="Anthropic client pool uninitialized")
     try:
-        client: AsyncAnthropic = gateway_state["anthropic"]
-        response = await client.messages.create(
+        response = await anthropic_pool.messages.create(
             model=ANTHROPIC_MODEL_NAME,
             max_tokens=1024,
             messages=[{"role": "user", "content": payload.prompt}],
             system="You are an advanced software architect AI. Provide concise answers.",
         )
-        # FIXED PARSING CORE: Added index 0 brackets to extract the text block out of the content list array safely
         resolved_response = response.content[0].text.strip()
         
         usage = response.usage
@@ -456,21 +394,16 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
 
 @app.post("/api/logs/search", tags=["Enterprise Log Retrieval"])
 async def secure_vector_log_search(payload: LogSearchRequest, customer_id: str = Depends(validate_gateway_token)):
+    if not openai_pool or not pinecone_pool:
+        raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
     try:
-        openai_client = gateway_state.get("openai")
-        pc_client = gateway_state.get("pinecone")
-        
-        if not openai_client or not pc_client:
-            raise HTTPException(status_code=503, detail="Database retrieval connection pool offline")
-
-        embedding_response = await openai_client.embeddings.create(
+        embedding_response = await openai_pool.embeddings.create(
             input=[payload.query], model="text-embedding-3-large", dimensions=2048
         )
-
-        query_vector = embedding_response.data.embedding
+        query_vector = embedding_response.data[0].embedding
         
         current_namespace = datetime.now().strftime("logs-%Y-%m")
-        index_target = pc_client.Index(PINECONE_INDEX_NAME)
+        index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
         
         search_results = index_target.query(
             vector=query_vector, top_k=payload.top_k, include_metadata=True,
