@@ -778,10 +778,195 @@ async def dynamic_developer_docs_bypass(token: str = None):
         title="Authorized Enterprise Gateway Documentation Panel"
     )
 
-@v1_router.get("/gateway/openapi.json", include_in_schema=False)
-async def dynamic_developer_openapi_schema(token: str = None):
+# ====================================================================
+# 🟢 AIRTIGHT ADMIN DASHBOARD CONTROL PANEL BYPASS (PLACE AT BOTTOM)
+# ====================================================================
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/control-panel", include_in_schema=False)
+async def secure_admin_control_panel_docs(token: str = None):
     """
-    Serves the supporting schema data strings securely to authorized tokens.
+    PERMANENT PRODUCTION BYPASS ENGINE.
+    Authenticates administrative master tokens and renders a self-contained, 
+    interactive Swagger UI control panel completely independent of core app blocks.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+        
+    clean_token = token.strip()
+    matched_meta = None
+    
+    # Authenticate the user against your master registry data
+    for secure_token, meta in CUSTOMER_REGISTRY.items():
+        if secrets.compare_digest(clean_token, secure_token.strip()):
+            matched_meta = meta
+            break
+            
+    if not matched_meta:
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
+        
+    if matched_meta["tier"] not in {"pro", "enterprise"}:
+        raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
+
+    # Returns the fully interactive dashboard UI mapping directly back onto your versioned secure endpoints
+    return get_swagger_ui_html(
+        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
+        title="Administrative Master Control Panel Proxy Gateway"
+    )
+
+# ====================================================================
+# 🟢 AIRTIGHT ADMIN DASHBOARD CONTROL PANEL BYPASS (PLACE AT BOTTOM)
+# ====================================================================
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/control-panel", include_in_schema=False)
+async def secure_admin_control_panel_docs(token: str = None):
+    """
+    PERMANENT PRODUCTION BYPASS ENGINE.
+    Authenticates administrative master tokens and renders a self-contained, 
+    interactive Swagger UI control panel completely independent of core app blocks.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+        
+    clean_token = token.strip()
+    matched_meta = None
+    
+    # Authenticate the user against your master registry data
+    for secure_token, meta in CUSTOMER_REGISTRY.items():
+        if secrets.compare_digest(clean_token, secure_token.strip()):
+            matched_meta = meta
+            break
+            
+    if not matched_meta:
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
+        
+    if matched_meta["tier"] not in {"pro", "enterprise"}:
+        raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
+
+    # Returns the fully interactive dashboard UI mapping directly back onto your versioned secure endpoints
+    return get_swagger_ui_html(
+        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
+        title="Administrative Master Control Panel Proxy Gateway"
+    )
+
+# ====================================================================
+# 🟢 AIRTIGHT ADMIN DASHBOARD CONTROL PANEL BYPASS (PLACE AT BOTTOM)
+# ====================================================================
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/control-panel", include_in_schema=False)
+async def secure_admin_control_panel_docs(token: str = None):
+    """
+    PERMANENT PRODUCTION BYPASS ENGINE.
+    Authenticates administrative master tokens and renders a self-contained, 
+    interactive Swagger UI control panel completely independent of core app blocks.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+        
+    clean_token = token.strip()
+    matched_meta = None
+    
+    # Authenticate the user against your master registry data
+    for secure_token, meta in CUSTOMER_REGISTRY.items():
+        if secrets.compare_digest(clean_token, secure_token.strip()):
+            matched_meta = meta
+            break
+            
+    if not matched_meta:
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
+        
+    if matched_meta["tier"] not in {"pro", "enterprise"}:
+        raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
+
+    # Returns the fully interactive dashboard UI mapping directly back onto your versioned secure endpoints
+    return get_swagger_ui_html(
+        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
+        title="Administrative Master Control Panel Proxy Gateway"
+    )
+
+# ====================================================================
+# 🟢 AIRTIGHT ADMIN DASHBOARD CONTROL PANEL BYPASS (PLACE AT BOTTOM)
+# ====================================================================
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/control-panel", include_in_schema=False)
+async def secure_admin_control_panel_docs(token: str = None):
+    """
+    PERMANENT PRODUCTION BYPASS ENGINE.
+    Authenticates administrative master tokens and renders a self-contained, 
+    interactive Swagger UI control panel completely independent of core app blocks.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+        
+    clean_token = token.strip()
+    matched_meta = None
+    
+    # Authenticate the user against your master registry data
+    for secure_token, meta in CUSTOMER_REGISTRY.items():
+        if secrets.compare_digest(clean_token, secure_token.strip()):
+            matched_meta = meta
+            break
+            
+    if not matched_meta:
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
+        
+    if matched_meta["tier"] not in {"pro", "enterprise"}:
+        raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
+
+    # Returns the fully interactive dashboard UI mapping directly back onto your versioned secure endpoints
+    return get_swagger_ui_html(
+        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
+        title="Administrative Master Control Panel Proxy Gateway"
+    )
+
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/control-panel", include_in_schema=False)
+async def secure_admin_control_panel_docs(token: str = None):
+    """
+    PERMANENT PRODUCTION BYPASS ENGINE.
+    Authenticates administrative master tokens and renders a self-contained, 
+    interactive Swagger UI control panel completely independent of core app blocks.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+        
+    clean_token = token.strip()
+    matched_meta = None
+    
+    # Authenticate the user against your master registry data
+    for secure_token, meta in CUSTOMER_REGISTRY.items():
+        if secrets.compare_digest(clean_token, secure_token.strip()):
+            matched_meta = meta
+            break
+            
+    if not matched_meta:
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
+        
+    if matched_meta["tier"] not in {"pro", "enterprise"}:
+        raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
+
+    # Returns the fully interactive dashboard UI mapping directly back onto your versioned secure endpoints
+    return get_swagger_ui_html(
+        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
+        title="Administrative Master Control Panel Proxy Gateway"
+    )
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/secure-schema.json", include_in_schema=False)
+async def secure_admin_runtime_schema(token: str = None):
+    """
+    Dynamically generates the complete API layout matrix on-the-fly ONLY 
+    when an authorized administrative token requests it.
     """
     if not token:
         raise HTTPException(status_code=403, detail="Access Denied.")
@@ -791,10 +976,10 @@ async def dynamic_developer_openapi_schema(token: str = None):
     if not is_valid:
         raise HTTPException(status_code=403, detail="Access Denied.")
         
+    # Dynamically build the route mapping graph without using the global app.openapi_url pool
     return get_openapi(
-        title=app.title,
-        version=app.version,
+        title="Hardened Enterprise API Gateway Platform",
+        version="4.5.0",
         routes=app.routes
     )
-
 app.include_router(v1_router)
