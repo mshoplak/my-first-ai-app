@@ -638,14 +638,26 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
     if "anthropic-sonnet" not in TIER_PROFILES[client_auth["tier"]]["allowed_models"]:
         raise HTTPException(status_code=403, detail=f"Access Forbidden: Model access restricted on plan tier [{client_auth['tier'].upper()}].")
 
+
     try:
         async with asyncio.timeout(25.0):
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME, max_tokens=1024, messages=[{"role": "user", "content": payload.prompt}], system="You are an advanced software architect AI. Provide concise answers."
+                model=ANTHROPIC_MODEL_NAME,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": payload.prompt}],
+                system="You are an advanced software architect AI. Provide concise answers.",
             )
-        resolved_response = response.content[0].text.strip()
+        
+        # FIX ACTIVE: Safely extract text from the content block array
+        if response and response.content and len(response.content) > 0:
+            raw_text = getattr(response.content[0], 'text', "") or ""
+            resolved_response = raw_text.strip()
+        else:
+            resolved_response = "Error: No response generated from the model."
+            
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
+
         
         rates = MODEL_PRICING["anthropic-sonnet"]
         cost = ((p_tok / 1000000.0) * rates["input"]) + ((c_tok / 1000000.0) * rates["output"])
@@ -698,12 +710,27 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             system_instruction = ("You are an elite international immigration attorney specializing in digital nomad visas.\nAnalyze the verified regulatory context files provided below and give precise, structured advice.\nAlways include a mandatory section at the very top titled 'REGULATORY LEGAL DISCLAIMER' explaining this does not constitute formal legal representation.")
             user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
 
+# ====================================================================
+# 🟢 UPDATE THIS REGION INSIDE YOUR /visa/advise ROUTE 
+# ====================================================================
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME, max_tokens=2048, temperature=0.1, system=system_instruction, messages=[{"role": "user", "content": user_content}]
+                model=ANTHROPIC_MODEL_NAME,
+                max_tokens=2048,
+                temperature=0.1,
+                system=system_instruction,
+                messages=[{"role": "user", "content": user_content}]
             )
-        resolved_advice = response.content.text.strip()
+        
+        # FIX ACTIVE: Safely extract text from the legal advisory response
+        if response and response.content and len(response.content) > 0:
+            raw_text = getattr(response.content[0], 'text', "") or ""
+            resolved_advice = raw_text.strip()
+        else:
+            resolved_advice = "Error: No legal advisory payload could be generated."
+            
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
+
         
         rates = MODEL_PRICING["anthropic-sonnet"]
         cost = ((p_tok / 1000000.0) * rates["input"]) + ((c_tok / 1000000.0) * rates["output"])
