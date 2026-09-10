@@ -875,9 +875,8 @@ async def secure_admin_runtime_schema(token: str = None):
         routes=app.routes
     )
     
-    # 🟢 FIX ACTIVE: Put your full application subdomain here
-    openapi_schema["servers"] = [{"url": "https://my-first-ai-app-kiuo.onrender.com"}]
-
+    # 🟢 INCORPORATED: Explicitly map the base server URL to properly align the /api/v1 prefix mapping
+    openapi_schema["servers"] = [{"url": "https://onrender.com"}]
     
     # 2. Return the fully configured schema dictionary map instead of running get_openapi directly inside return
     return openapi_schema
