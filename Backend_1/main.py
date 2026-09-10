@@ -93,17 +93,19 @@ TIER_PROFILES = {
     "enterprise": {"rate_limit": 300, "window": 60, "allowed_models": {"openai-gpt-4o", "anthropic-sonnet"}}
 }
 
+
 CUSTOMER_REGISTRY: dict[str, dict] = {}
 raw_keys_string = os.getenv("CUSTOMER_GATEWAY_KEYS", "").strip().strip('"').strip("'")
 if raw_keys_string:
     for pair in raw_keys_string.split(","):
         clean_pair = pair.strip()
         parts = clean_pair.split(":")
+        # Fix active: extracts array variables by index positioning instead of stripping lists
         if len(parts) >= 2:
-            token = parts.strip()
-            client_name = parts.strip()
-            tier = parts.strip().lower() if len(parts) >= 3 and parts.strip().lower() in TIER_PROFILES else "free"
-            reseller_parent = parts.strip() if len(parts) == 4 else "direct"
+            token = parts[0].strip()
+            client_name = parts[1].strip()
+            tier = parts[2].strip().lower() if len(parts) >= 3 and parts[2].strip().lower() in TIER_PROFILES else "free"
+            reseller_parent = parts[3].strip() if len(parts) == 4 else "direct"
             
             CUSTOMER_REGISTRY[token] = {
                 "customer_id": client_name,
@@ -112,6 +114,7 @@ if raw_keys_string:
                 "current_month_spend": 0.0,
                 "reseller_parent": reseller_parent
             }
+
 
 _missing = [name for name, value in (("OPENAI_API_KEY", OPENAI_API_KEY), ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY), ("PINECONE_API_KEY", PINECONE_API_KEY)) if not value]
 if _missing or not CUSTOMER_REGISTRY:
