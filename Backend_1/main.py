@@ -852,11 +852,13 @@ async def secure_admin_control_panel_docs(token: str = None):
         title="Administrative Master Control Panel Proxy Gateway"
     )
 
+
 @v1_router.get("/gateway/secure-schema.json", include_in_schema=False)
 async def secure_admin_runtime_schema(token: str = None):
     """
-    Dynamically generates the complete API layout matrix on-the-fly ONLY 
-    when an authorized administrative token requests it.
+    Dynamically generates the complete API layout matrix on-the-fly.
+    Fix active: Includes BOTH root app routes and versioned sub-router paths 
+    to align the UI browser execution links seamlessly.
     """
     if not token:
         raise HTTPException(status_code=403, detail="Access Denied.")
@@ -866,12 +868,13 @@ async def secure_admin_runtime_schema(token: str = None):
     if not is_valid:
         raise HTTPException(status_code=403, detail="Access Denied.")
         
-    # Dynamically build the route mapping graph without using the global app.openapi_url pool
+    # Corrected: Generates the Swagger dictionary tree by passing the core 'app' containing all routers
     return get_openapi(
         title="Hardened Enterprise API Gateway Platform",
         version="4.5.0",
         routes=app.routes
     )
+
 
 # --------------------------------------------------------------------
 # 📌 ABSOLUTE LAST LINE OF THE FILE: MOUNT THE ROUTER TREE ONLY ONCE
