@@ -740,4 +740,61 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
         logger.error(f"Search Fault Error: {str(err)}")
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
 
+# ====================================================================
+# 🟢 ON-DEMAND DYNAMIC DOCUMENTATION BYPASS (PLACE AT BOTTOM OF PART 7)
+# ====================================================================
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+
+@v1_router.get("/gateway/docs", include_in_schema=False)
+async def dynamic_developer_docs_bypass(token: str = None):
+    """
+    VULNERABILITY #11 HARDENING BYPASS: Automated Developer Token Verification.
+    Dynamically authenticates and renders the interactive Swagger UI panel on-demand
+    in production environments only if a verified administrative token is present.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied: Missing authorization query token.")
+        
+    clean_token = token.strip()
+    matched_meta = None
+    
+    # Securely verify if the provided query string matches a registered developer account
+    for secure_token, meta in CUSTOMER_REGISTRY.items():
+        if secrets.compare_digest(clean_token, secure_token.strip()):
+            matched_meta = meta
+            break
+            
+    if not matched_meta:
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid gateway credentials.")
+        
+    # Enforce that only Pro or Enterprise tier tokens can unlock the blueprint views
+    if matched_meta["tier"] not in {"pro", "enterprise"}:
+        raise HTTPException(status_code=403, detail="Access Denied: Insufficient authorization clearing tier.")
+
+    # Render and return the complete interactive Swagger UI HTML package inline
+    return get_swagger_ui_html(
+        openapi_url="/api/v1/gateway/openapi.json?token=" + clean_token,
+        title="Authorized Enterprise Gateway Documentation Panel"
+    )
+
+@v1_router.get("/gateway/openapi.json", include_in_schema=False)
+async def dynamic_developer_openapi_schema(token: str = None):
+    """
+    Serves the supporting schema data strings securely to authorized tokens.
+    """
+    if not token:
+        raise HTTPException(status_code=403, detail="Access Denied.")
+        
+    clean_token = token.strip()
+    is_valid = any(secrets.compare_digest(clean_token, k.strip()) for k in CUSTOMER_REGISTRY.keys())
+    if not is_valid:
+        raise HTTPException(status_code=403, detail="Access Denied.")
+        
+    return get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes
+    )
+
 app.include_router(v1_router)
