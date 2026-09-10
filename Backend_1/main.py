@@ -857,8 +857,8 @@ async def secure_admin_control_panel_docs(token: str = None):
 async def secure_admin_runtime_schema(token: str = None):
     """
     Dynamically generates the complete API layout matrix on-the-fly.
-    Fix active: Includes BOTH root app routes and versioned sub-router paths 
-    to align the UI browser execution links seamlessly.
+    Fix active: Combines root application route trees and schema elements
+    and injects the explicit server prefix array to align proxy endpoints.
     """
     if not token:
         raise HTTPException(status_code=403, detail="Access Denied.")
@@ -868,13 +868,18 @@ async def secure_admin_runtime_schema(token: str = None):
     if not is_valid:
         raise HTTPException(status_code=403, detail="Access Denied.")
         
-    # Corrected: Generates the Swagger dictionary tree by passing the core 'app' containing all routers
-    return get_openapi(
+    # 1. Generate the raw schema dictionary from your core application routes
+    openapi_schema = get_openapi(
         title="Hardened Enterprise API Gateway Platform",
         version="4.5.0",
         routes=app.routes
     )
-
+    
+    # 🟢 INCORPORATED: Explicitly map the base server URL to properly align the /api/v1 prefix mapping
+    openapi_schema["servers"] = [{"url": "https://onrender.com"}]
+    
+    # 2. Return the fully configured schema dictionary map instead of running get_openapi directly inside return
+    return openapi_schema
 
 # --------------------------------------------------------------------
 # 📌 ABSOLUTE LAST LINE OF THE FILE: MOUNT THE ROUTER TREE ONLY ONCE
