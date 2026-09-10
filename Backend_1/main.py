@@ -40,7 +40,6 @@ class JSONProductionLogFormatter(logging.Formatter):
 
 logger = logging.getLogger("expat-gateway")
 log_handler = logging.StreamHandler()
-
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
@@ -194,7 +193,6 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)) -
         
     _enforce_rate_limit(clean_header_token, matched_customer["tier"])
     return matched_customer
-
 # ----------------------------------------------------
 # PYDANTIC DATA VALIDATORS & SCHEMAS
 # ----------------------------------------------------
@@ -306,7 +304,7 @@ def verify_engine_pool(pool_object, engine_name: str) -> None:
 # ----------------------------------------------------
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
-    description="Multi-tenant provider AI gateway tracking individual client authorization strings.",
+    description="Multi-tenant gateway tracking client authorization strings.",
     version="4.3.0",
     lifespan=app_lifespan,
     docs_url=None if IS_PRODUCTION else "/docs"
@@ -437,7 +435,7 @@ async def append_to_history_log(
                     model="text-embedding-3-large",
                     dimensions=2048
                 )
-                vector_values = embedding_response.data[0].embedding
+                vector_values = embedding_response.data.embedding
                 log_id = f"log_{secrets.token_hex(8)}"
                 
                 metadata_payload = {
@@ -618,7 +616,6 @@ async def create_nomad_checkout_session(payload: CustomerRegistrationRequest):
 @v1_router.post("/translate", tags=["Proxy Engines"])
 async def optimized_translation(payload: TranslationRequest, background_tasks: BackgroundTasks, client_auth: dict = Depends(validate_gateway_token)):
     verify_engine_pool(openai_pool, "OpenAI")
-    
     current_spend = client_auth.get("current_month_spend", 0.0)
     max_cap = client_auth.get("monthly_spending_cap", 5.00)
     if current_spend >= max_cap:
@@ -645,7 +642,7 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
                 ],
                 temperature=0.2,
             )
-        content = response.choices[0].message.content or ""
+        content = response.choices.message.content or ""
         transformed_output = content.strip()
         usage = response.usage
         p_tok, c_tok = (usage.prompt_tokens, usage.completion_tokens) if usage else (0, 0)
@@ -674,46 +671,44 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
 @v1_router.post("/claude/chat", tags=["Proxy Engines"])
 async def optimized_claude_chat(payload: ChatRequest, background_tasks: BackgroundTasks, client_auth: dict = Depends(validate_gateway_token)):
     verify_engine_pool(anthropic_pool, "Anthropic")
-    
     current_spend = client_auth.get("current_month_spend", 0.0)
     max_cap = client_auth.get("monthly_spending_cap", 5.00)
     if current_spend >= max_cap:
         raise HTTPException(status_code=402, detail="Payment Required: Monthly platform budget threshold exceeded.")
-        
-        if "anthropic-sonnet" not in TIER_PROFILES[client_auth["tier"]]["allowed_models"]:
-            raise HTTPException(status_code=403, detail=f"Access Forbidden: Model access restricted on plan tier [{client_auth['tier'].upper()}].")
+    if "anthropic-sonnet" not in TIER_PROFILES[client_auth["tier"]]["allowed_models"]:
+        raise HTTPException(status_code=403, detail=f"Access Forbidden: Model access restricted on plan tier [{client_auth['tier'].upper()}].")
 
-        try:
-            async with asyncio.timeout(25.0):
-                response = await anthropic_pool.messages.create(
-                    model=ANTHROPIC_MODEL_NAME,
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": payload.prompt}],
-                    system="You are an advanced software architect AI. Provide concise answers.",
-                )
-            resolved_response = response.content.text.strip()
-            usage = response.usage
-            p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
-            
-            rates = MODEL_PRICING["anthropic-sonnet"]
-            cost = ((p_tok / 1000000.0) * rates["input"]) + ((c_tok / 1000000.0) * rates["output"])
-            for token, meta in CUSTOMER_REGISTRY.items():
-                if meta["customer_id"] == client_auth["customer_id"]:
-                    CUSTOMER_REGISTRY[token]["current_month_spend"] = round(current_spend + cost, 6)
-                    break
-
-            background_tasks.add_task(
-                append_to_history_log, 
-                client_auth["customer_id"], client_auth["reseller_parent"],
-                f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", 
-                payload.prompt, resolved_response, p_tok, c_tok, "anthropic-sonnet"
+    try:
+        async with asyncio.timeout(25.0):
+            response = await anthropic_pool.messages.create(
+                model=ANTHROPIC_MODEL_NAME,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": payload.prompt}],
+                system="You are an advanced software architect AI. Provide concise answers.",
             )
-            return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Upstream completion transaction timed out at the route boundary.")
-        except Exception:
-            logger.exception("Chat request failed")
-            raise HTTPException(status_code=500, detail="Chat service unavailable")
+        resolved_response = response.content.text.strip()
+        usage = response.usage
+        p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
+        
+        rates = MODEL_PRICING["anthropic-sonnet"]
+        cost = ((p_tok / 1000000.0) * rates["input"]) + ((c_tok / 1000000.0) * rates["output"])
+        for token, meta in CUSTOMER_REGISTRY.items():
+            if meta["customer_id"] == client_auth["customer_id"]:
+                CUSTOMER_REGISTRY[token]["current_month_spend"] = round(current_spend + cost, 6)
+                break
+
+        background_tasks.add_task(
+            append_to_history_log, 
+            client_auth["customer_id"], client_auth["reseller_parent"],
+            f"Anthropic ({ANTHROPIC_MODEL_NAME})", "Architect Chat Prompt", 
+            payload.prompt, resolved_response, p_tok, c_tok, "anthropic-sonnet"
+        )
+        return {"resolved_by": f"Anthropic ({ANTHROPIC_MODEL_NAME})", "response_payload": resolved_response}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Upstream completion transaction timed out at the route boundary.")
+    except Exception:
+        logger.exception("Chat request failed")
+        raise HTTPException(status_code=500, detail="Chat service unavailable")
 
 @v1_router.post("/visa/advise", tags=["Expat Legal Core"])
 async def generate_visa_legal_advice(payload: VisaConsultationRequest, background_tasks: BackgroundTasks, client_auth: dict = Depends(validate_gateway_token)):
@@ -864,4 +859,8 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
         logger.error(f"Search Fault Error: {str(err)}")
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
 
+# ----------------------------------------------------
+# CORE APP ROUTER SPECIFICATION REGISTRATION MOUNT
+# ----------------------------------------------------
 app.include_router(v1_router)
+        
