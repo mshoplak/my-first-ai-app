@@ -581,15 +581,31 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
     if client_auth["tier"] == "free" and target in premium_languages:
         raise HTTPException(status_code=402, detail="Premium Subsystem Language pairing requirements require Pro or Enterprise plans.")
 
+# ====================================================================
+# 🟢 CORRECT THE PARSING ENGINE INSIDE @v1_router.post("/translate")
+# ====================================================================
     try:
         async with asyncio.timeout(25.0):
             response = await openai_pool.chat.completions.create(
-                model=assigned_model, messages=[{"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."}, {"role": "user", "content": payload.text}], temperature=0.2
+                model=assigned_model,
+                messages=[
+                    {"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."},
+                    {"role": "user", "content": payload.text},
+                ],
+                temperature=0.2,
             )
-        content = response.choices.message.content or ""
+        
+        # FIX ACTIVE: Extract index 0 from the choices list before calling .message
+        if response and response.choices and len(response.choices) > 0:
+            choice_object = response.choices[0]
+            content = choice_object.message.content or ""
+        else:
+            content = ""
+            
         transformed_output = content.strip()
         usage = response.usage
         p_tok, c_tok = (usage.prompt_tokens, usage.completion_tokens) if usage else (0, 0)
+
         
         if pricing_key in MODEL_PRICING:
             rates = MODEL_PRICING[pricing_key]
