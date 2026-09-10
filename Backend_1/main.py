@@ -40,6 +40,7 @@ class JSONProductionLogFormatter(logging.Formatter):
 
 logger = logging.getLogger("expat-gateway")
 log_handler = logging.StreamHandler()
+
 IS_ON_RENDER = os.getenv("RENDER") is not None or os.getenv("PORT") is not None
 
 if not IS_ON_RENDER:
@@ -99,10 +100,10 @@ if raw_keys_string:
         clean_pair = pair.strip()
         parts = clean_pair.split(":")
         if len(parts) >= 2:
-            token = parts[0].strip()
-            client_name = parts[1].strip()
-            tier = parts[2].strip().lower() if len(parts) >= 3 and parts[2].strip().lower() in TIER_PROFILES else "free"
-            reseller_parent = parts[3].strip() if len(parts) == 4 else "direct"
+            token = parts.strip()
+            client_name = parts.strip()
+            tier = parts.strip().lower() if len(parts) >= 3 and parts.strip().lower() in TIER_PROFILES else "free"
+            reseller_parent = parts.strip() if len(parts) == 4 else "direct"
             
             CUSTOMER_REGISTRY[token] = {
                 "customer_id": client_name,
@@ -193,6 +194,7 @@ async def validate_gateway_token(header_token: str = Security(api_key_header)) -
         
     _enforce_rate_limit(clean_header_token, matched_customer["tier"])
     return matched_customer
+
 # ----------------------------------------------------
 # PYDANTIC DATA VALIDATORS & SCHEMAS
 # ----------------------------------------------------
@@ -244,6 +246,7 @@ class VisaConsultationRequest(BaseModel):
 class CustomerRegistrationRequest(BaseModel):
     email: str = Field(..., max_length=128)
     client_name: str = Field(..., min_length=2, max_length=64)
+
 # ----------------------------------------------------
 # THREAD-SAFE CLIENT LAYER LIFESPAN POOLS
 # ----------------------------------------------------
@@ -300,14 +303,17 @@ def verify_engine_pool(pool_object, engine_name: str) -> None:
         )
 
 # ----------------------------------------------------
-# SYSTEM APP SETUP & FIREWALL MIDDLEWARE
+# SYSTEM APP SETUP & FIREWALL MIDDLEWARE (HARDENED)
 # ----------------------------------------------------
+# VULNERABILITY #11 OPTIMIZATION ACTIVE: Hard-locked to APP_ENV definition context
 app = FastAPI(
     title="Expat AI Advanced Enterprise Gateway",
     description="Multi-tenant gateway tracking client authorization strings.",
-    version="4.3.0",
+    version="4.4.0",
     lifespan=app_lifespan,
-    docs_url=None if IS_PRODUCTION else "/docs"
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json"
 )
 
 _explicit_allowed_origins = {
@@ -337,6 +343,7 @@ async def enforce_production_ssl_and_cors(request: Request, call_next):
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Nomad-Gateway-Token"
             
     return response
+
 # ----------------------------------------------------
 # SECURITY HARDENED LOGGING & EMBEDDING ENGINES
 # ----------------------------------------------------
@@ -349,10 +356,6 @@ def sanitize_for_csv(text: str) -> str:
     return clean_text
 
 def _sync_csv_append_worker(timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, total_cost):
-    """
-    Synchronous disk file operation executed off-loop via background thread allocation.
-    This maintains high concurrency across active async endpoints.
-    """
     with _history_file_lock:
         if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > (10 * 1024 * 1024):
             backup_path = _HISTORY_LOG_PATH.with_name("history_old.csv")
@@ -372,39 +375,21 @@ def _sync_pinecone_upsert(index_name: str, vectors: list, namespace: str):
     index_target.upsert(vectors=vectors, namespace=namespace)
 
 async def emit_stripe_metered_usage(customer_id: str, reseller_parent: str, calculated_cost: float, total_tokens: int):
-    """
-    Live Stripe Metered Billing Engine.
-    Transmits aggregated transaction volumes directly to Stripe's measurement infrastructure.
-    """
     if customer_id.startswith("sandbox_") or reseller_parent != "direct":
         logger.info(f"Billing Bypass Log: Sandbox context tracking -> {customer_id} used {total_tokens} tokens.")
         return
-
     try:
         await asyncio.to_thread(
             stripe.billing.MeterEvent.create,
             event_name="ai_gateway_tokens",
-            payload={
-                "value": str(total_tokens),
-                "stripe_customer_id": customer_id
-            },
+            payload={"value": str(total_tokens), "stripe_customer_id": customer_id},
             timestamp=int(time.time())
         )
         logger.info(f"Stripe Usage Transmitted: Processed entry validation metrics for client {customer_id}")
     except Exception as e:
         logger.error(f"Stripe Metering Failure payload dropped: {str(e)}")
 
-async def append_to_history_log(
-    customer_id: str,
-    reseller_parent: str,
-    engine_name: str,
-    task_type: str,
-    user_input: str,
-    ai_output: str,
-    prompt_tokens: int = 0,
-    completion_tokens: int = 0,
-    pricing_key: str = None
-) -> None:
+async def append_to_history_log(customer_id: str, reseller_parent: str, engine_name: str, task_type: str, user_input: str, ai_output: str, prompt_tokens: int = 0, completion_tokens: int = 0, pricing_key: str = None) -> None:
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clean_input = sanitize_for_csv(user_input)[:1000]
     clean_output = sanitize_for_csv(ai_output)[:2000]
@@ -419,10 +404,7 @@ async def append_to_history_log(
     await emit_stripe_metered_usage(customer_id, reseller_parent, total_cost, (prompt_tokens + completion_tokens))
 
     try:
-        await asyncio.to_thread(
-            _sync_csv_append_worker,
-            timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, total_cost
-        )
+        await asyncio.to_thread(_sync_csv_append_worker, timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, total_cost)
     except Exception as log_err:
         logger.error(f"CSV Logging Fault trace: {str(log_err)}")
 
@@ -430,38 +412,22 @@ async def append_to_history_log(
         try:
             if openai_pool and pinecone_pool:
                 text_to_embed = f"Client: {customer_id} | Input: {clean_input} | Output: {clean_output}"
-                embedding_response = await openai_pool.embeddings.create(
-                    input=[text_to_embed],
-                    model="text-embedding-3-large",
-                    dimensions=2048
-                )
-                vector_values = embedding_response.data.embedding
+                embedding_response = await openai_pool.embeddings.create(input=[text_to_embed], model="text-embedding-3-large", dimensions=2048)
+                vector_values = embedding_response.data[0].embedding
                 log_id = f"log_{secrets.token_hex(8)}"
                 
                 metadata_payload = {
-                    "timestamp": timestamp_str,
-                    "customer_id": customer_id,
-                    "engine": engine_name,
-                    "mode": task_type,
-                    "input_text": clean_input,
-                    "output_text": clean_output,
-                    "prompt_tokens": str(prompt_tokens),
-                    "completion_tokens": str(completion_tokens),
-                    "total_tokens": str(prompt_tokens + completion_tokens),
-                    "estimated_cost_usd": str(total_cost)
+                    "timestamp": timestamp_str, "customer_id": customer_id, "engine": engine_name, "mode": task_type,
+                    "input_text": clean_input, "output_text": clean_output, "prompt_tokens": str(prompt_tokens),
+                    "completion_tokens": str(completion_tokens), "total_tokens": str(prompt_tokens + completion_tokens), "estimated_cost_usd": str(total_cost)
                 }
                 current_namespace = datetime.now().strftime("logs-%Y-%m")
-                
-                await asyncio.to_thread(
-                    _sync_pinecone_upsert,
-                    PINECONE_INDEX_NAME,
-                    [{"id": log_id, "values": vector_values, "metadata": metadata_payload}],
-                    current_namespace
-                )
+                await asyncio.to_thread(_sync_pinecone_upsert, PINECONE_INDEX_NAME, [{"id": log_id, "values": vector_values, "metadata": metadata_payload}], current_namespace)
             else:
                 logger.error("Background task worker initialization exception context dropped.")
         except Exception as pinecone_err:
             logger.error(f"Pinecone Sync Disruption context log: {str(pinecone_err)}")
+
 # ----------------------------------------------------
 # SYSTEM VERSIONED ROUTING LAYER & IDEMPOTENCY SETS
 # ----------------------------------------------------
@@ -496,6 +462,7 @@ async def deep_health_check():
 
     try:
         if pinecone_pool:
+            import asyncio
             await asyncio.to_thread(pinecone_pool.describe_index, PINECONE_INDEX_NAME)
             checks["pinecone"] = "ok"
         else:
@@ -504,18 +471,13 @@ async def deep_health_check():
         checks["pinecone"] = "unreachable"
 
     is_degraded = any(status in {"unreachable", "offline"} for status in checks.values())
-    return {
-        "status": "degraded" if is_degraded else "healthy",
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "checks": checks
-    }
+    return {"status": "degraded" if is_degraded else "healthy", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "checks": checks}
 
 @app.post("/api/v1/webhooks/stripe", tags=["Automated Billing Engine"])
 async def stripe_billing_webhook(request: Request, x_stripe_signature: str = Header(None)):
     if not x_stripe_signature:
         logger.error("Unsigned transaction payload intercepted at billing route.")
         raise HTTPException(status_code=400, detail="Missing verification headers.")
-        
     if not STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="Billing webhook configuration offline.")
         
@@ -571,7 +533,6 @@ async def stripe_billing_webhook(request: Request, x_stripe_signature: str = Hea
                     CUSTOMER_REGISTRY[token]["monthly_spending_cap"] = 5.00
                 has_updated = True
                 break
-
         if has_updated:
             save_registry_to_disk()
 
@@ -580,35 +541,20 @@ async def stripe_billing_webhook(request: Request, x_stripe_signature: str = Hea
 @app.post("/api/v1/checkout/session", tags=["Automated Billing Engine"])
 async def create_nomad_checkout_session(payload: CustomerRegistrationRequest):
     try:
-        customer = await asyncio.to_thread(
-            stripe.Customer.create,
-            email=payload.email,
-            name=payload.client_name
-        )
+        customer = await asyncio.to_thread(stripe.Customer.create, email=payload.email, name=payload.client_name)
         generated_token = f"nvt_{secrets.token_urlsafe(32)}"
         CUSTOMER_REGISTRY[generated_token] = {
-            "customer_id": customer["id"],
-            "tier": "free",
-            "monthly_spending_cap": 5.00,
-            "current_month_spend": 0.0,
-            "reseller_parent": "direct"
+            "customer_id": customer["id"], "tier": "free", "monthly_spending_cap": 5.00, "current_month_spend": 0.0, "reseller_parent": "direct"
         }
         save_registry_to_disk()
         
         session = await asyncio.to_thread(
             stripe.checkout.Session.create,
-            customer=customer["id"],
-            payment_method_types=["card"],
-            line_items=[{"price": STRIPE_PRICE_ID_PRO, "quantity": 1}],
-            mode="subscription",
-            success_url="https://your-app-portal.com",
-            cancel_url="https://your-app-portal.com",
+            customer=customer["id"], payment_method_types=["card"],
+            line_items=[{"price": STRIPE_PRICE_ID_PRO, "quantity": 1}], mode="subscription",
+            success_url="https://your-app-portal.com", cancel_url="https://your-app-portal.com",
         )
-        return {
-            "registration_status": "pending_payment",
-            "assigned_gateway_token": generated_token,
-            "stripe_checkout_redirect_url": session["url"]
-        }
+        return {"registration_status": "pending_payment", "assigned_gateway_token": generated_token, "stripe_checkout_redirect_url": session["url"]}
     except Exception as err:
         logger.error(f"Checkout Session Generation Interruption: {str(err)}")
         raise HTTPException(status_code=500, detail="Failed to initialize user checkout sequence.")
@@ -628,19 +574,14 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
         pricing_key = "openai-gpt-4o-mini"
         
     target = payload.target_language.strip().lower()
-    premium_languages = frozenset({"arabic", "bengali", "czech", "danish", "dutch", "finnish", "greek", "hebrew", "hindi", "hungarian", "indonesian", "italian", "korean", "malay", "norwegian", "polish", "portuguese", "romanian", "russian", "swedish", "thai", "turkish", "ukrainian", "urdu", "vietnamese"})
+    premium_languages = frozenset({"arabic", "bengali", "czech", "danish", "dutch", "finnish", "greek", "hebrew", "hindi", "hungarian", "indonesian", "italian", "korean", "malay", "norwegian", "polish", "portuguese", "romanian", "russian", "spanish", "swedish", "thai", "turkish", "ukrainian", "urdu", "vietnamese"})
     if client_auth["tier"] == "free" and target in premium_languages:
         raise HTTPException(status_code=402, detail="Premium Subsystem Language pairing requirements require Pro or Enterprise plans.")
 
     try:
         async with asyncio.timeout(25.0):
             response = await openai_pool.chat.completions.create(
-                model=assigned_model,
-                messages=[
-                    {"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."},
-                    {"role": "user", "content": payload.text},
-                ],
-                temperature=0.2,
+                model=assigned_model, messages=[{"role": "system", "content": f"Translate the user text into fluent {payload.target_language}."}, {"role": "user", "content": payload.text}], temperature=0.2
             )
         content = response.choices.message.content or ""
         transformed_output = content.strip()
@@ -654,13 +595,7 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
                 if meta["customer_id"] == client_auth["customer_id"]:
                     CUSTOMER_REGISTRY[token]["current_month_spend"] = round(current_spend + cost, 6)
                     break
-
-        background_tasks.add_task(
-            append_to_history_log, 
-            client_auth["customer_id"], client_auth["reseller_parent"],
-            f"OpenAI ({assigned_model})", f"Translation ({payload.target_language})", 
-            payload.text, transformed_output, p_tok, c_tok, pricing_key
-        )
+        background_tasks.add_task(append_to_history_log, client_auth["customer_id"], client_auth["reseller_parent"], f"OpenAI ({assigned_model})", f"Translation ({payload.target_language})", payload.text, transformed_output, p_tok, c_tok, pricing_key)
         return {"resolved_by": f"OpenAI ({assigned_model})", "transformed_text": transformed_output}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Upstream completion transaction timed out at the route boundary.")
@@ -681,12 +616,9 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
     try:
         async with asyncio.timeout(25.0):
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": payload.prompt}],
-                system="You are an advanced software architect AI. Provide concise answers.",
+                model=ANTHROPIC_MODEL_NAME, max_tokens=1024, messages=[{"role": "user", "content": payload.prompt}], system="You are an advanced software architect AI. Provide concise answers."
             )
-        resolved_response = response.content.text.strip()
+        resolved_response = response.content[0].text.strip()
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
         
@@ -714,7 +646,6 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
 async def generate_visa_legal_advice(payload: VisaConsultationRequest, background_tasks: BackgroundTasks, client_auth: dict = Depends(validate_gateway_token)):
     if client_auth["tier"] == "free":
         raise HTTPException(status_code=402, detail="Premium Subsystem: The Visa Advisory Engine requires an active Pro or Enterprise plan.")
-
     verify_engine_pool(openai_pool, "OpenAI")
     verify_engine_pool(anthropic_pool, "Anthropic")
     verify_engine_pool(pinecone_pool, "Pinecone")
@@ -727,45 +658,24 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
     try:
         search_prompt = f"Visa options for {payload.current_citizenship} citizen moving to {payload.destination_country}. Income: ${payload.monthly_income_usd}/mo. Context: {payload.query}"
         async with asyncio.timeout(25.0):
-            embedding_response = await openai_pool.embeddings.create(
-                input=[search_prompt],
-                model="text-embedding-3-large",
-                dimensions=2048
-            )
+            embedding_response = await openai_pool.embeddings.create(input=[search_prompt], model="text-embedding-3-large", dimensions=2048)
             query_vector = embedding_response.data.embedding
 
             index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
-            raw_laws = await asyncio.to_thread(
-                index_target.query,
-                vector=query_vector,
-                top_k=3,
-                include_metadata=True,
-                namespace="global-immigration-statutes"
-            )
-
+            raw_laws = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=3, include_metadata=True, namespace="global-immigration-statutes")
             context_snippets = []
             for match in raw_laws.get("matches", []):
                 if match.get("score", 0) >= 0.15:
                     meta = match.get("metadata", {})
                     context_snippets.append(f"Source [{meta.get('document_id', 'Immigration law')}]: {meta.get('text_extract', '')}")
-
             laws_context = "\n\n".join(context_snippets) if context_snippets else "No specific statutory text matches found."
 
-            system_instruction = (
-                "You are an elite international immigration attorney specializing in digital nomad visas.\n"
-                "Analyze the verified regulatory context files provided below and give precise, structured advice.\n"
-                "Always include a mandatory section at the very top titled 'REGULATORY LEGAL DISCLAIMER' explaining this does not constitute formal legal representation."
-            )
+            system_instruction = ("You are an elite international immigration attorney specializing in digital nomad visas.\nAnalyze the verified regulatory context files provided below and give precise, structured advice.\nAlways include a mandatory section at the very top titled 'REGULATORY LEGAL DISCLAIMER' explaining this does not constitute formal legal representation.")
             user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
 
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME,
-                max_tokens=2048,
-                temperature=0.1,
-                system=system_instruction,
-                messages=[{"role": "user", "content": user_content}]
+                model=ANTHROPIC_MODEL_NAME, max_tokens=2048, temperature=0.1, system=system_instruction, messages=[{"role": "user", "content": user_content}]
             )
-        
         resolved_advice = response.content.text.strip()
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
@@ -776,19 +686,8 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             if meta["customer_id"] == client_auth["customer_id"]:
                 CUSTOMER_REGISTRY[token]["current_month_spend"] = round(current_spend + cost, 6)
                 break
-
-        background_tasks.add_task(
-            append_to_history_log,
-            client_auth["customer_id"], client_auth["reseller_parent"],
-            f"Anthropic ({ANTHROPIC_MODEL_NAME})", f"Visa Advisor ({payload.destination_country})",
-            payload.query, resolved_advice, p_tok, c_tok, "anthropic-sonnet"
-        )
-        return {
-            "resolved_by": "Expat Legal Advisory Core (Claude 3.5 Sonnet)",
-            "account_tier": client_auth["tier"],
-            "legal_context_matches_found": len(context_snippets),
-            "advice_payload": resolved_advice
-        }
+        background_tasks.add_task(append_to_history_log, client_auth["customer_id"], client_auth["reseller_parent"], f"Anthropic ({ANTHROPIC_MODEL_NAME})", f"Visa Advisor ({payload.destination_country})", payload.query, resolved_advice, p_tok, c_tok, "anthropic-sonnet")
+        return {"resolved_by": "Expat Legal Advisory Core (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Upstream processing timed out at the route boundary.")
     except Exception as err:
@@ -801,11 +700,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
     verify_engine_pool(pinecone_pool, "Pinecone")
     try:
         async with asyncio.timeout(25.0):
-            embedding_response = await openai_pool.embeddings.create(
-                input=[payload.query],
-                model="text-embedding-3-large",
-                dimensions=2048
-            )
+            embedding_response = await openai_pool.embeddings.create(input=[payload.query], model="text-embedding-3-large", dimensions=2048)
             query_vector = embedding_response.data.embedding
             
             current_date = datetime.now()
@@ -821,14 +716,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
             all_matches = []
             for ns in namespaces_to_scan:
                 try:
-                    search_results = await asyncio.to_thread(
-                        index_target.query,
-                        vector=query_vector,
-                        top_k=payload.top_k,
-                        include_metadata=True,
-                        namespace=ns,
-                        filter={"customer_id": {"$eq": client_auth["customer_id"]}}
-                    )
+                    search_results = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=payload.top_k, include_metadata=True, namespace=ns, filter={"customer_id": {"$eq": client_auth["customer_id"]}})
                     all_matches.extend(search_results.get("matches", []))
                 except Exception as ns_err:
                     logger.warning(f"Skipped partition namespace scanning boundary [{ns}]: {str(ns_err)}")
@@ -841,26 +729,12 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
             if score >= CONFIDENCE_THRESHOLD:
                 metadata = match.get("metadata", {})
                 clean_payload = {k: (str(v) if not isinstance(v, list) else [str(x) for x in v]) for k, v in metadata.items()}
-                parsed_logs.append({
-                    "log_id": match.get("id"),
-                    "similarity_score": score,
-                    "data_payload": clean_payload
-                })
-                
-        return {
-            "search_query": payload.query,
-            "partitions_scanned": namespaces_to_scan,
-            "records_found_count": len(parsed_logs),
-            "results": parsed_logs
-        }
+                parsed_logs.append({"log_id": match.get("id"), "similarity_score": score, "data_payload": clean_payload})
+        return {"search_query": payload.query, "partitions_scanned": namespaces_to_scan, "records_found_count": len(parsed_logs), "results": parsed_logs}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Log retrieval search timed out.")
     except Exception as err:
         logger.error(f"Search Fault Error: {str(err)}")
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
 
-# ----------------------------------------------------
-# CORE APP ROUTER SPECIFICATION REGISTRATION MOUNT
-# ----------------------------------------------------
 app.include_router(v1_router)
-        
