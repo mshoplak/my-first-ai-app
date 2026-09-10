@@ -716,8 +716,12 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
 
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME, max_tokens=2048, temperature=0.1, system=system_instruction, messages=[{"role": "user", "content": user_content}]
+                model=ANTHROPIC_MODEL_NAME, 
+                max_tokens=2048, 
+                system=system_instruction, 
+                messages=[{"role": "user", "content": user_content}]
             )
+
             
         # FIX ACTIVE: Safely extract text from the legal advisory response block array
         if response and response.content and len(response.content) > 0:
