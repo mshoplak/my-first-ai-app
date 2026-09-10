@@ -696,7 +696,12 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
         search_prompt = f"Visa options for {payload.current_citizenship} citizen moving to {payload.destination_country}. Income: ${payload.monthly_income_usd}/mo. Context: {payload.query}"
         async with asyncio.timeout(25.0):
             embedding_response = await openai_pool.embeddings.create(input=[search_prompt], model="text-embedding-3-large", dimensions=2048)
-            query_vector = embedding_response.data.embedding
+            
+            # FIX ACTIVE: Safely extract index 0 from the data array list layout before reading .embedding
+            if embedding_response and embedding_response.data and len(embedding_response.data) > 0:
+                query_vector = embedding_response.data[0].embedding
+            else:
+                raise HTTPException(status_code=500, detail="Failed to compute text semantic vectors.")
 
             index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
             raw_laws = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=3, include_metadata=True, namespace="global-immigration-statutes")
@@ -710,18 +715,11 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             system_instruction = ("You are an elite international immigration attorney specializing in digital nomad visas.\nAnalyze the verified regulatory context files provided below and give precise, structured advice.\nAlways include a mandatory section at the very top titled 'REGULATORY LEGAL DISCLAIMER' explaining this does not constitute formal legal representation.")
             user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
 
-# ====================================================================
-# 🟢 UPDATE THIS REGION INSIDE YOUR /visa/advise ROUTE 
-# ====================================================================
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME,
-                max_tokens=2048,
-                temperature=0.1,
-                system=system_instruction,
-                messages=[{"role": "user", "content": user_content}]
+                model=ANTHROPIC_MODEL_NAME, max_tokens=2048, temperature=0.1, system=system_instruction, messages=[{"role": "user", "content": user_content}]
             )
-        
-        # FIX ACTIVE: Safely extract text from the legal advisory response
+            
+        # FIX ACTIVE: Safely extract text from the legal advisory response block array
         if response and response.content and len(response.content) > 0:
             raw_text = getattr(response.content[0], 'text', "") or ""
             resolved_advice = raw_text.strip()
@@ -730,7 +728,6 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
-
         
         rates = MODEL_PRICING["anthropic-sonnet"]
         cost = ((p_tok / 1000000.0) * rates["input"]) + ((c_tok / 1000000.0) * rates["output"])
@@ -738,6 +735,7 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             if meta["customer_id"] == client_auth["customer_id"]:
                 CUSTOMER_REGISTRY[token]["current_month_spend"] = round(current_spend + cost, 6)
                 break
+                
         background_tasks.add_task(append_to_history_log, client_auth["customer_id"], client_auth["reseller_parent"], f"Anthropic ({ANTHROPIC_MODEL_NAME})", f"Visa Advisor ({payload.destination_country})", payload.query, resolved_advice, p_tok, c_tok, "anthropic-sonnet")
         return {"resolved_by": "Expat Legal Advisory Core (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
     except asyncio.TimeoutError:
