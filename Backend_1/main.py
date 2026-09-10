@@ -170,18 +170,24 @@ def _enforce_rate_limit(token: str, tier: str = "free") -> None:
     limit = profile["rate_limit"]
     window = profile["window"]
     
+# ====================================================================
+# 🟢 CORRECT THE SLIDING CONTAINER CALCULATION INSIDE _enforce_rate_limit
+# ====================================================================
     with _rate_lock:
+        # Clear out stagnant historical tenant records safely
         dead_keys = [k for k, v in _rate_buckets.items() if not v or (now - v[-1]) > window]
         for dk in dead_keys:
             del _rate_buckets[dk]
             
         bucket = _rate_buckets[token]
-        while bucket and (now - bucket) > window:
+        # FIX ACTIVE: Extract index 0 from the queue list before performing math
+        while bucket and (now - bucket[0]) > window:
             bucket.popleft()
             
         if len(bucket) >= limit:
             raise HTTPException(status_code=429, detail=f"Rate limit exceeded for plan tier [{tier.upper()}]. Try again later.")
         bucket.append(now)
+
 
 async def validate_gateway_token(header_token: str = Security(api_key_header)) -> dict:
     clean_header_token = header_token.strip()
