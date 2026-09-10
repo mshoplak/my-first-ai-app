@@ -725,27 +725,43 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
     verify_engine_pool(pinecone_pool, "Pinecone")
     try:
         async with asyncio.timeout(25.0):
-            embedding_response = await openai_pool.embeddings.create(input=[payload.query], model="text-embedding-3-large", dimensions=2048)
-            query_vector = embedding_response.data.embedding
+            embedding_response = await openai_pool.embeddings.create(
+                input=[payload.query], 
+                model="text-embedding-3-large", 
+                dimensions=2048
+            )
             
-            current_date = datetime.now()
-            current_namespace = current_date.strftime("logs-%Y-%m")
-            if current_date.month == 1:
-                prev_namespace = f"logs-{current_date.year - 1}-12"
-            else:
-                prev_namespace = f"logs-{current_date.year}-{str(current_date.month - 1).zfill(2)}"
+        # FIX ACTIVE: Safely extract index 0 from the data array list layout
+        if embedding_response and embedding_response.data and len(embedding_response.data) > 0:
+            query_vector = embedding_response.data[0].embedding
+        else:
+            raise HTTPException(status_code=500, detail="Failed to compute text data vectors.")
+            
+        current_date = datetime.now()
+        current_namespace = current_date.strftime("logs-%Y-%m")
+        if current_date.month == 1:
+            prev_namespace = f"logs-{current_date.year - 1}-12"
+        else:
+            prev_namespace = f"logs-{current_date.year}-{str(current_date.month - 1).zfill(2)}"
+            
+        namespaces_to_scan = [current_namespace, prev_namespace]
+        index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
+        
+        all_matches = []
+        for ns in namespaces_to_scan:
+            try:
+                search_results = await asyncio.to_thread(
+                    index_target.query, 
+                    vector=query_vector, 
+                    top_k=payload.top_k, 
+                    include_metadata=True, 
+                    namespace=ns, 
+                    filter={"customer_id": {"$eq": client_auth["customer_id"]}}
+                )
+                all_matches.extend(search_results.get("matches", []))
+            except Exception as ns_err:
+                logger.warning(f"Skipped partition namespace scanning boundary [{ns}]: {str(ns_err)}")
                 
-            namespaces_to_scan = [current_namespace, prev_namespace]
-            index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
-            
-            all_matches = []
-            for ns in namespaces_to_scan:
-                try:
-                    search_results = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=payload.top_k, include_metadata=True, namespace=ns, filter={"customer_id": {"$eq": client_auth["customer_id"]}})
-                    all_matches.extend(search_results.get("matches", []))
-                except Exception as ns_err:
-                    logger.warning(f"Skipped partition namespace scanning boundary [{ns}]: {str(ns_err)}")
-
         all_matches = sorted(all_matches, key=lambda x: x.get("score", 0), reverse=True)[:payload.top_k]
         CONFIDENCE_THRESHOLD = 0.10
         parsed_logs = []
@@ -754,8 +770,18 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
             if score >= CONFIDENCE_THRESHOLD:
                 metadata = match.get("metadata", {})
                 clean_payload = {k: (str(v) if not isinstance(v, list) else [str(x) for x in v]) for k, v in metadata.items()}
-                parsed_logs.append({"log_id": match.get("id"), "similarity_score": score, "data_payload": clean_payload})
-        return {"search_query": payload.query, "partitions_scanned": namespaces_to_scan, "records_found_count": len(parsed_logs), "results": parsed_logs}
+                parsed_logs.append({
+                    "log_id": match.get("id"), 
+                    "similarity_score": score, 
+                    "data_payload": clean_payload
+                })
+                
+        return {
+            "search_query": payload.query, 
+            "partitions_scanned": namespaces_to_scan, 
+            "records_found_count": len(parsed_logs), 
+            "results": parsed_logs
+        }
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Log retrieval search timed out.")
     except Exception as err:
