@@ -760,11 +760,12 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
                 model=ANTHROPIC_MODEL_NAME, max_tokens=2048, system=system_instruction, messages=[{"role": "user", "content": user_content}]
             )
             
+        # FIX ACTIVE: Extract index 0 from the content blocks array list before formatting text
         if response and response.content and len(response.content) > 0:
-            raw_text = getattr(response.content, 'text', "") or ""
-            resolved_advice = raw_text.strip()
+            resolved_advice = response.content[0].text.strip()
         else:
             resolved_advice = "Error: No legal advisory payload could be generated."
+
             
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
