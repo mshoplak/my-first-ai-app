@@ -293,28 +293,51 @@ app = FastAPI(
     openapi_url=None if IS_PRODUCTION else "/openapi.json"
 )
 
-_explicit_allowed_origins = {"http://localhost:3000", "http://127.0.0.1:3000", "https://vercel.app"}
-ALLOWED_ORIGIN_REGEX = re.compile(r"^https:\/\/.*\.onrender\.com$|^https:\/\/.*\.vercel\.app$")
+# ====================================================================
+# HARDENED PRODUCTION CORS FIREWALL (REPLACES CHUNK 5 MIDDLEWARE)
+# ====================================================================
+# Define your explicit allowed testing and production web domains
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://onrender.com", # primary live server link
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True, # Allowed safely now because origins are explicitly named
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Nomad-Gateway-Token", "accept"],
+)
 
 @app.middleware("http")
-async def enforce_production_ssl_and_cors(request: Request, call_next):
+async def enforce_production_ssl_redirect(request: Request, call_next):
+    """
+    Enforces secure HTTPS routing lines on public cloud deployment clusters
+    without dropping cross-origin preflight handshakes.
+    """
+    # 1. Instantly let browser preflight OPTIONS handshakes clear without check filters
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     forwarded_proto = request.headers.get("x-forwarded-proto", "http")
-    _internal_whitelisted_paths = {"/", "/health", "/health/deep", "/docs", "/openapi.json", "/api/v1/webhooks/stripe"}
+    _internal_whitelisted_paths = {
+        "/", 
+        "/health", 
+        "/health/deep", 
+        "/docs", 
+        "/redoc", 
+        "/openapi.json", 
+        "/api/v1/webhooks/stripe"
+    }
     
     if (IS_ON_RENDER or IS_PRODUCTION) and forwarded_proto == "http" and request.url.path not in _internal_whitelisted_paths:
         secure_url = request.url.replace(scheme="https")
         return RedirectResponse(secure_url, status_code=301)
         
-    origin = request.headers.get("origin")
-    response = await call_next(request)
-    
-    if origin:
-        if origin in _explicit_allowed_origins or ALLOWED_ORIGIN_REGEX.match(origin):
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "false"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Nomad-Gateway-Token"
-    return response
+    return await call_next(request)
+
 
 # ----------------------------------------------------
 # SECURITY HARDENED LOGGING & EMBEDDING ENGINES
