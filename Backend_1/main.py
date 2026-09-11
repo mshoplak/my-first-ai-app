@@ -293,29 +293,11 @@ app = FastAPI(
     openapi_url=None if IS_PRODUCTION else "/openapi.json"
 )
 
-# ====================================================================
-# 🟢 HARDENED PRODUCTION CORS & PREFLIGHT FIREWALL (REPLACES CHUNK 5 MIDDLEWARE)
-# ====================================================================
-# 1. Mount the native CORSMiddleware system right below 'app = FastAPI(...)'
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows cross-origin browser sandboxes to handshake safely
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Nomad-Gateway-Token"],
-)
+_explicit_allowed_origins = {"http://localhost:3000", "http://127.0.0.1:3000", "https://vercel.app"}
+ALLOWED_ORIGIN_REGEX = re.compile(r"^https:\/\/.*\.onrender\.com$|^https:\/\/.*\.vercel\.app$")
 
 @app.middleware("http")
-async def enforce_production_ssl_redirect(request: Request, call_next):
-    """
-    Enforces secure HTTPS routing lines on public cloud deployment clusters
-    without dropping cross-origin preflight handshakes.
-    """
-    # 2. Immediately let browser preflight checks pass through unhindered
-    if request.method == "OPTIONS":
-        return await call_next(request)
-
-    # 3. Handle strict secure HTTPS application redirection
+async def enforce_production_ssl_and_cors(request: Request, call_next):
     forwarded_proto = request.headers.get("x-forwarded-proto", "http")
     _internal_whitelisted_paths = {"/", "/health", "/health/deep", "/docs", "/openapi.json", "/api/v1/webhooks/stripe"}
     
@@ -323,42 +305,16 @@ async def enforce_production_ssl_redirect(request: Request, call_next):
         secure_url = request.url.replace(scheme="https")
         return RedirectResponse(secure_url, status_code=301)
         
-    return await call_next(request)
-
-# ----------------------------------------------------
-# SECURITY HARDENED LOGGING & EMBEDDING ENGINES
-# ----------------------------------------------------
-def sanitize_for_csv(text: str) -> str:
-    if not text: return ""
-    clean_text = text.replace("\t", " ").replace("\n", " ").replace("\r", " ")
-    if clean_text.startswith(('=', '+', '-', '@')):
-        return f"'{clean_text}"
-    return clean_text
-
-def _sync_csv_append_worker(timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, total_cost):
-    try:
-        if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > (10 * 1024 * 1024):
-            backup_path = _HISTORY_LOG_PATH.with_name("history_old.csv")
-            if backup_path.exists():
-                backup_path.unlink()
-            _HISTORY_LOG_PATH.rename(backup_path)
-        
-        file_exists = _HISTORY_LOG_PATH.exists()
-        with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            if not file_exists:
-                writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response", "Total Cost ($)"])
-            writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, f"${total_cost:.6f}"])
-    except Exception as err:
-        logger.error(f"CSV Logging write failure context dropped: {str(err)}")
-
-def _sync_pinecone_upsert(index_name: str, vectors: list, namespace: str):
-    try:
-        index_target = pinecone_pool.Index(index_name)
-        index_target.upsert(vectors=vectors, namespace=namespace)
-    except Exception as e:
-        logger.error(f"Async Pinecone Background Logger dropped: {str(e)}")
-
+    origin = request.headers.get("origin")
+    response = await call_next(request)
+    
+    if origin:
+        if origin in _explicit_allowed_origins or ALLOWED_ORIGIN_REGEX.match(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "false"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Nomad-Gateway-Token"
+    return response
 
 # ----------------------------------------------------
 # SECURITY HARDENED LOGGING & EMBEDDING ENGINES
@@ -885,19 +841,23 @@ async def secure_admin_runtime_schema(token: str = None):
     openapi_schema["servers"] = [{"url": "https://onrender.com"}]
     return openapi_schema
 
+# ====================================================================
+# FIXED LOG DOWNLOAD COMPONENT (REMOVES PARAMETER CLASHES)
+# ====================================================================
 from fastapi.responses import StreamingResponse
 import io
 
 @v1_router.get("/gateway/download-history", tags=["Enterprise Log Retrieval"])
-async def export_vector_logs_to_csv(token: str = None):
+async def export_vector_logs_to_csv(download_auth_token: str = None):
     """
     Dumps history dynamically from Pinecone partitions directly into a 
     downloadable browser CSV file, bypassing unstable local server storage completely.
     """
-    if not token: 
-        raise HTTPException(status_code=403, detail="Access Denied.")
+    # FIXED: Switched parameter target variable to clear routing intersections
+    if not download_auth_token: 
+        raise HTTPException(status_code=403, detail="Access Denied: Missing authentication parameter.")
     
-    clean_token = token.strip()
+    clean_token = download_auth_token.strip()
     client_auth = CUSTOMER_REGISTRY.get(clean_token)
     if not client_auth:
         raise HTTPException(status_code=403, detail="Invalid Credentials.")
@@ -906,6 +866,7 @@ async def export_vector_logs_to_csv(token: str = None):
     current_date = datetime.now()
     current_namespace = current_date.strftime("logs-%Y-%m")
     
+    verify_engine_pool(pinecone_pool, "Pinecone")
     index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
     loop = asyncio.get_running_loop()
     
@@ -913,7 +874,7 @@ async def export_vector_logs_to_csv(token: str = None):
         search_results = await loop.run_in_executor(
             io_pool_executor,
             lambda: index_target.query(
-                vector=[0.0] * 2048, # Zero-vector combined with filter returns raw nodes
+                vector=[0.0] * 2048, 
                 top_k=100,
                 include_metadata=True,
                 namespace=current_namespace,
@@ -922,6 +883,7 @@ async def export_vector_logs_to_csv(token: str = None):
         )
         matches = search_results.get("matches", [])
     except Exception as e:
+        logger.error(f"Pinecone CSV dynamic extraction break: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database extraction failed: {str(e)}")
 
     # 2. Programmatically generate a clean CSV string in system memory
@@ -947,6 +909,7 @@ async def export_vector_logs_to_csv(token: str = None):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=gateway_history_export.csv"}
     )
+
 
 # --------------------------------------------------------------------
 # ABSOLUTE LAST LINE OF THE FILE: MOUNT THE ROUTER TREE ONLY ONCE
