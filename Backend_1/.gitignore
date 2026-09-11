@@ -16,3 +16,8 @@ venv/
 .cursor/
 .vscode/
 
+# Runtime data files (contain secrets/user data)
+registry.json
+history.csv
+history_old.csv
+

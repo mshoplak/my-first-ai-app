@@ -83,7 +83,7 @@ _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
 _REGISTRY_STORAGE_PATH = Path(__file__).resolve().parent / "registry.json"
 
 # FIXED PERF: Large thread pool dedicated purely to non-blocking I/O network / disk writes
-io_pool_executor = ThreadPoolExecutor(max_workers=64)
+io_pool_executor = ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 2) * 4))
 
 TIER_PROFILES = {
     "free": {"rate_limit": 5, "window": 60, "allowed_models": {"openai-gpt-4o-mini"}},
@@ -227,6 +227,13 @@ class VisaConsultationRequest(BaseModel):
 class CustomerRegistrationRequest(BaseModel):
     email: str = Field(..., max_length=128)
     client_name: str = Field(..., min_length=2, max_length=64)
+    @field_validator("email")
+    @classmethod
+    def validate_email_format(cls, value: str) -> str:
+        email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+        if not email_pattern.match(value.strip()):
+            raise ValueError("Invalid email format.")
+        return value.strip().lower()
 
 # ----------------------------------------------------
 # THREAD-SAFE CLIENT LAYER LIFESPAN POOLS
@@ -300,7 +307,8 @@ app = FastAPI(
 allowed_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://onrender.com", # primary live server link
+    # TODO: Replace with your exact Render subdomain, e.g. "https://your-app.onrender.com"
+    "https://onrender.com", # primary live server link — WARNING: should be exact subdomain
 ]
 
 app.add_middleware(
@@ -467,7 +475,8 @@ async def stripe_billing_webhook(request: Request, x_stripe_signature: str = Hea
     try:
         event = stripe.Webhook.construct_event(payload, x_stripe_signature, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid billing signature payload: {str(e)}")
+        logger.warning(f"Stripe webhook signature verification failed: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid billing signature payload.")
 
     event_id = event.get("id")
     async with _stripe_idempotency_lock:
@@ -489,7 +498,11 @@ async def stripe_billing_webhook(request: Request, x_stripe_signature: str = Hea
     elif event["type"] in {"customer.subscription.created", "customer.subscription.updated"}:
         sub_obj = event["data"]["object"]
         stripe_customer_id = sub_obj["customer"]
-        stripe_price_id = sub_obj["items"]["data"]["price"]["id"]
+        try:
+            stripe_price_id = sub_obj["items"]["data"][0]["price"]["id"]
+        except (KeyError, IndexError, TypeError):
+            logger.error(f"Unexpected subscription structure for customer {stripe_customer_id}")
+            return {"status": "skipped_malformed", "processed": False}
         sub_status = sub_obj["status"]
 
         new_tier, spending_cap = "free", 5.00
@@ -830,8 +843,382 @@ async def secure_vector_log_search(
 # ====================================================================
 # HARDENED SECURE ADMIN DASHBOARD ENGINE (CLEAN & COMPLETE)
 # ====================================================================
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import HTMLResponse
+
+# ---------------------------------------------------------------------------
+# Modern dark-theme Swagger UI renderer (replaces default get_swagger_ui_html)
+# ---------------------------------------------------------------------------
+_DARK_SWAGGER_CSS_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"
+_DARK_SWAGGER_JS_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"
+
+def _build_dark_swagger_html(openapi_url: str, title: str) -> HTMLResponse:
+    """Return a fully self-contained dark-themed Swagger UI HTML page."""
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<link rel="stylesheet" href="{_DARK_SWAGGER_CSS_URL}">
+<style>
+  /* ── Foundation ─────────────────────────────────────────────── */
+  :root {{
+    --bg-primary:    #0f1117;
+    --bg-secondary:  #161922;
+    --bg-card:       #1c1f2b;
+    --bg-input:      #252836;
+    --border-subtle:  #2a2d3a;
+    --border-focus:   #6c63ff;
+    --text-primary:  #e2e4ea;
+    --text-secondary:#9ca3af;
+    --text-muted:    #6b7280;
+    --accent:        #6c63ff;
+    --accent-hover:  #7f78ff;
+    --accent-glow:   rgba(108,99,255,.18);
+    --green:         #22c55e;
+    --green-bg:      rgba(34,197,94,.12);
+    --blue:          #3b82f6;
+    --blue-bg:       rgba(59,130,246,.12);
+    --orange:        #f59e0b;
+    --orange-bg:     rgba(245,158,11,.12);
+    --red:           #ef4444;
+    --red-bg:        rgba(239,68,68,.12);
+    --cyan:          #06b6d4;
+    --cyan-bg:       rgba(6,182,212,.10);
+    --radius:        10px;
+    --radius-sm:     6px;
+    --transition:    .2s ease;
+  }}
+  *, *::before, *::after {{ box-sizing: border-box; }}
+
+  /* ── Page body ──────────────────────────────────────────────── */
+  body {{
+    margin: 0;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 Oxygen, Ubuntu, Cantarell, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }}
+
+  /* ── Top bar ────────────────────────────────────────────────── */
+  .swagger-ui .topbar {{
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 10px 0;
+  }}
+  .swagger-ui .topbar .download-url-wrapper .select-label span,
+  .swagger-ui .topbar a {{ color: var(--text-secondary); }}
+  .swagger-ui .topbar .download-url-wrapper input[type=text] {{
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+  }}
+
+  /* ── Info header area ───────────────────────────────────────── */
+  .swagger-ui .info {{
+    margin: 30px 0 20px;
+  }}
+  .swagger-ui .info .title,
+  .swagger-ui .info h1,
+  .swagger-ui .info h2,
+  .swagger-ui .info h3 {{
+    color: var(--text-primary);
+  }}
+  .swagger-ui .info .title small {{ color: var(--accent); background: var(--accent-glow); padding: 2px 10px; border-radius: 20px; font-weight: 500; }}
+  .swagger-ui .info p,
+  .swagger-ui .info li,
+  .swagger-ui .info table {{
+    color: var(--text-secondary);
+  }}
+  .swagger-ui .info a {{ color: var(--accent); }}
+  .swagger-ui .info a:hover {{ color: var(--accent-hover); }}
+
+  /* ── Wrapper backgrounds ────────────────────────────────────── */
+  .swagger-ui .wrapper,
+  .swagger-ui .scheme-container {{
+    background: var(--bg-primary);
+  }}
+  .swagger-ui .scheme-container {{
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: none;
+  }}
+
+  /* ── Section / Tag headers ──────────────────────────────────── */
+  .swagger-ui .opblock-tag {{
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-subtle);
+  }}
+  .swagger-ui .opblock-tag:hover {{
+    background: var(--bg-secondary);
+  }}
+  .swagger-ui .opblock-tag small {{
+    color: var(--text-muted);
+  }}
+
+  /* ── Method blocks (POST / GET / PUT / DELETE) ──────────────── */
+  .swagger-ui .opblock {{
+    border-radius: var(--radius);
+    border: 1px solid var(--border-subtle);
+    box-shadow: 0 1px 3px rgba(0,0,0,.25);
+    margin-bottom: 12px;
+    background: var(--bg-card);
+  }}
+  /* POST */
+  .swagger-ui .opblock.opblock-post {{
+    background: var(--green-bg);
+    border-color: rgba(34,197,94,.25);
+  }}
+  .swagger-ui .opblock.opblock-post .opblock-summary-method {{
+    background: var(--green);
+  }}
+  .swagger-ui .opblock.opblock-post .opblock-summary {{
+    border-color: rgba(34,197,94,.20);
+  }}
+  /* GET */
+  .swagger-ui .opblock.opblock-get {{
+    background: var(--blue-bg);
+    border-color: rgba(59,130,246,.25);
+  }}
+  .swagger-ui .opblock.opblock-get .opblock-summary-method {{
+    background: var(--blue);
+  }}
+  .swagger-ui .opblock.opblock-get .opblock-summary {{
+    border-color: rgba(59,130,246,.20);
+  }}
+  /* PUT */
+  .swagger-ui .opblock.opblock-put {{
+    background: var(--orange-bg);
+    border-color: rgba(245,158,11,.25);
+  }}
+  .swagger-ui .opblock.opblock-put .opblock-summary-method {{
+    background: var(--orange);
+  }}
+  .swagger-ui .opblock.opblock-put .opblock-summary {{
+    border-color: rgba(245,158,11,.20);
+  }}
+  /* DELETE */
+  .swagger-ui .opblock.opblock-delete {{
+    background: var(--red-bg);
+    border-color: rgba(239,68,68,.25);
+  }}
+  .swagger-ui .opblock.opblock-delete .opblock-summary-method {{
+    background: var(--red);
+  }}
+  .swagger-ui .opblock.opblock-delete .opblock-summary {{
+    border-color: rgba(239,68,68,.20);
+  }}
+  /* Method pill */
+  .swagger-ui .opblock .opblock-summary-method {{
+    border-radius: var(--radius-sm);
+    font-weight: 700;
+    min-width: 72px;
+    text-align: center;
+    font-size: 13px;
+  }}
+
+  /* ── Summary & description text ─────────────────────────────── */
+  .swagger-ui .opblock .opblock-summary-description,
+  .swagger-ui .opblock .opblock-summary-path,
+  .swagger-ui .opblock .opblock-summary-path a {{
+    color: var(--text-secondary);
+  }}
+  .swagger-ui .opblock .opblock-summary:hover {{
+    cursor: pointer;
+  }}
+
+  /* ── Expanded operation body ────────────────────────────────── */
+  .swagger-ui .opblock-body {{ color: var(--text-secondary); }}
+  .swagger-ui .opblock-body pre.microlight {{
+    background: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    font-size: 13px;
+    padding: 14px;
+  }}
+  .swagger-ui .opblock-description-wrapper p,
+  .swagger-ui .opblock-external-docs-wrapper p {{
+    color: var(--text-secondary);
+  }}
+
+  /* ── Parameters table ──────────────────────────────────────── */
+  .swagger-ui table thead tr th,
+  .swagger-ui table thead tr td,
+  .swagger-ui .parameters-col_description p {{
+    color: var(--text-secondary);
+  }}
+  .swagger-ui .parameter__name {{ color: var(--text-primary); }}
+  .swagger-ui .parameter__name.required::after {{ color: var(--red); }}
+  .swagger-ui table tbody tr td {{ color: var(--text-secondary); border-color: var(--border-subtle); }}
+  .swagger-ui .parameters-col_description input,
+  .swagger-ui .parameters-col_description select,
+  .swagger-ui .body-param textarea {{
+    background: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: var(--radius-sm) !important;
+  }}
+  .swagger-ui .parameters-col_description input:focus,
+  .swagger-ui .parameters-col_description select:focus,
+  .swagger-ui .body-param textarea:focus {{
+    border-color: var(--border-focus) !important;
+    box-shadow: 0 0 0 3px var(--accent-glow) !important;
+    outline: none;
+  }}
+
+  /* ── Response section ───────────────────────────────────────── */
+  .swagger-ui .responses-inner {{ background: transparent; }}
+  .swagger-ui .responses-inner h4,
+  .swagger-ui .responses-inner h5,
+  .swagger-ui .response-col_status {{
+    color: var(--text-primary);
+  }}
+  .swagger-ui .response-col_description__inner p {{ color: var(--text-secondary); }}
+  .swagger-ui .responses-table thead td {{ color: var(--text-muted); border-color: var(--border-subtle); }}
+  .swagger-ui .response .response-col_description {{
+    color: var(--text-secondary);
+  }}
+
+  /* ── Models / Schemas section ───────────────────────────────── */
+  .swagger-ui section.models {{
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+  }}
+  .swagger-ui section.models h4 {{ color: var(--text-primary); }}
+  .swagger-ui section.models .model-container {{
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    margin: 6px 0;
+  }}
+  .swagger-ui .model {{ color: var(--text-secondary); }}
+  .swagger-ui .model-title {{ color: var(--text-primary); }}
+  .swagger-ui .model .property {{ color: var(--cyan); }}
+  .swagger-ui .prop-type {{ color: var(--accent); }}
+
+  /* ── Buttons ────────────────────────────────────────────────── */
+  .swagger-ui .btn {{
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    transition: var(--transition);
+  }}
+  .swagger-ui .btn.execute {{
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }}
+  .swagger-ui .btn.execute:hover {{
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }}
+  .swagger-ui .btn.cancel {{
+    color: var(--text-secondary);
+    border-color: var(--border-subtle);
+  }}
+  .swagger-ui .btn.authorize {{
+    color: var(--green);
+    border-color: var(--green);
+  }}
+  .swagger-ui .btn.authorize svg {{ fill: var(--green); }}
+
+  /* ── Authorize dialog ──────────────────────────────────────── */
+  .swagger-ui .dialog-ux .modal-ux {{
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+  }}
+  .swagger-ui .dialog-ux .modal-ux-header h3 {{ color: var(--text-primary); }}
+  .swagger-ui .dialog-ux .modal-ux-content p,
+  .swagger-ui .dialog-ux .modal-ux-content label {{ color: var(--text-secondary); }}
+  .swagger-ui .dialog-ux .modal-ux-content input {{
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }}
+  .swagger-ui .dialog-ux .modal-ux-content input:focus {{
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }}
+  .swagger-ui .dialog-ux .modal-ux-header {{ border-color: var(--border-subtle); }}
+
+  /* ── Select dropdowns ──────────────────────────────────────── */
+  .swagger-ui select {{
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }}
+
+  /* ── JSON / example highlights ──────────────────────────────── */
+  .swagger-ui .highlight-code > .microlight code {{
+    color: var(--text-primary) !important;
+  }}
+  .swagger-ui .renderedMarkdown p {{ color: var(--text-secondary); }}
+  .swagger-ui .markdown p, .swagger-ui .markdown li {{ color: var(--text-secondary); }}
+
+  /* ── Copy-to-clipboard button ───────────────────────────────── */
+  .swagger-ui .copy-to-clipboard {{ background: var(--bg-input); border-radius: var(--radius-sm); }}
+  .swagger-ui .copy-to-clipboard button {{ color: var(--text-muted); }}
+
+  /* ── Tab headers in responses ───────────────────────────────── */
+  .swagger-ui .tab li {{ color: var(--text-muted); }}
+  .swagger-ui .tab li.active {{ color: var(--text-primary); }}
+  .swagger-ui .tab li button.tablinks {{ color: inherit; }}
+
+  /* ── Loading bar ────────────────────────────────────────────── */
+  .swagger-ui .loading-container .loading::after {{ color: var(--text-muted); }}
+
+  /* ── Arrows / expand icons ─────────────────────────────────── */
+  .swagger-ui .expand-operation svg,
+  .swagger-ui .arrow {{ fill: var(--text-muted); }}
+  .swagger-ui .opblock-tag:hover .expand-operation svg {{ fill: var(--text-primary); }}
+
+  /* ── Server dropdown area ───────────────────────────────────── */
+  .swagger-ui .servers > label {{ color: var(--text-secondary); }}
+  .swagger-ui .servers > label select {{ background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-subtle); }}
+
+  /* ── Scrollbar ──────────────────────────────────────────────── */
+  ::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+  ::-webkit-scrollbar-track {{ background: var(--bg-secondary); }}
+  ::-webkit-scrollbar-thumb {{ background: var(--border-subtle); border-radius: 4px; }}
+  ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
+
+  /* ── Filter search box ─────────────────────────────────────── */
+  .swagger-ui .filter .operation-filter-input {{
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }}
+</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="{_DARK_SWAGGER_JS_URL}"></script>
+<script>
+const ui = SwaggerUIBundle({{
+    url: '{openapi_url}',
+    dom_id: '#swagger-ui',
+    deepLinking: true,
+    defaultModelsExpandDepth: 0,
+    defaultModelExpandDepth: 1,
+    docExpansion: 'list',
+    filter: true,
+    syntaxHighlight: {{ activated: true, theme: 'monokai' }},
+    presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIBundle.SwaggerUIStandalonePreset
+    ],
+    layout: 'StandaloneLayout'
+}})
+</script>
+</body>
+</html>"""
+    return HTMLResponse(html)
 
 @v1_router.get("/gateway/control-panel", include_in_schema=False)
 async def secure_admin_control_panel_docs(token: str = None):
@@ -849,10 +1236,9 @@ async def secure_admin_control_panel_docs(token: str = None):
     if not matched_meta:
         raise HTTPException(status_code=403, detail="Access Denied: Invalid gateway token.")
 
-    # Restored to look for '?token=' so your original URLs work perfectly
-    return get_swagger_ui_html(
+    return _build_dark_swagger_html(
         openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
-        title="Administrative Master Control Panel Proxy Gateway"
+        title="Expat AI — Gateway Control Panel"
     )
 
 @v1_router.get("/gateway/secure-schema.json", include_in_schema=False)
@@ -922,7 +1308,7 @@ async def export_vector_logs_to_csv(download_auth_token: str = None):
         matches = search_results.get("matches", [])
     except Exception as e:
         logger.error(f"Pinecone CSV dynamic extraction break: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database extraction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database extraction failed.")
 
     # 2. Programmatically generate a clean CSV string in system memory
     output = io.StringIO()
