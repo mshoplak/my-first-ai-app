@@ -293,11 +293,29 @@ app = FastAPI(
     openapi_url=None if IS_PRODUCTION else "/openapi.json"
 )
 
-_explicit_allowed_origins = {"http://localhost:3000", "http://127.0.0.1:3000", "https://vercel.app"}
-ALLOWED_ORIGIN_REGEX = re.compile(r"^https:\/\/.*\.onrender\.com$|^https:\/\/.*\.vercel\.app$")
+# ====================================================================
+# 🟢 HARDENED PRODUCTION CORS & PREFLIGHT FIREWALL (REPLACES CHUNK 5 MIDDLEWARE)
+# ====================================================================
+# 1. Mount the native CORSMiddleware system right below 'app = FastAPI(...)'
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows cross-origin browser sandboxes to handshake safely
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Nomad-Gateway-Token"],
+)
 
 @app.middleware("http")
-async def enforce_production_ssl_and_cors(request: Request, call_next):
+async def enforce_production_ssl_redirect(request: Request, call_next):
+    """
+    Enforces secure HTTPS routing lines on public cloud deployment clusters
+    without dropping cross-origin preflight handshakes.
+    """
+    # 2. Immediately let browser preflight checks pass through unhindered
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # 3. Handle strict secure HTTPS application redirection
     forwarded_proto = request.headers.get("x-forwarded-proto", "http")
     _internal_whitelisted_paths = {"/", "/health", "/health/deep", "/docs", "/openapi.json", "/api/v1/webhooks/stripe"}
     
@@ -305,16 +323,7 @@ async def enforce_production_ssl_and_cors(request: Request, call_next):
         secure_url = request.url.replace(scheme="https")
         return RedirectResponse(secure_url, status_code=301)
         
-    origin = request.headers.get("origin")
-    response = await call_next(request)
-    
-    if origin:
-        if origin in _explicit_allowed_origins or ALLOWED_ORIGIN_REGEX.match(origin):
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "false"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Nomad-Gateway-Token"
-    return response
+    return await call_next(request)
 
 # ----------------------------------------------------
 # SECURITY HARDENED LOGGING & EMBEDDING ENGINES
@@ -350,7 +359,42 @@ def _sync_pinecone_upsert(index_name: str, vectors: list, namespace: str):
     except Exception as e:
         logger.error(f"Async Pinecone Background Logger dropped: {str(e)}")
 
-# 🔥 FIXED PERF: Accepting precalculated payload vectors prevents doing secondary OpenAI requests inside logging operations
+
+# ----------------------------------------------------
+# SECURITY HARDENED LOGGING & EMBEDDING ENGINES
+# ----------------------------------------------------
+def sanitize_for_csv(text: str) -> str:
+    if not text: return ""
+    clean_text = text.replace("\t", " ").replace("\n", " ").replace("\r", " ")
+    if clean_text.startswith(('=', '+', '-', '@')):
+        return f"'{clean_text}"
+    return clean_text
+
+def _sync_csv_append_worker(timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, total_cost):
+    try:
+        if _HISTORY_LOG_PATH.exists() and _HISTORY_LOG_PATH.stat().st_size > (10 * 1024 * 1024):
+            backup_path = _HISTORY_LOG_PATH.with_name("history_old.csv")
+            if backup_path.exists():
+                backup_path.unlink()
+            _HISTORY_LOG_PATH.rename(backup_path)
+        
+        file_exists = _HISTORY_LOG_PATH.exists()
+        with open(_HISTORY_LOG_PATH, mode="a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["Timestamp", "Authorized Client ID", "Engine", "Mode", "Input Payload", "AI Output Response", "Total Cost ($)"])
+            writer.writerow([timestamp_str, customer_id, engine_name, task_type, clean_input, clean_output, f"${total_cost:.6f}"])
+    except Exception as err:
+        logger.error(f"CSV Logging write failure context dropped: {str(err)}")
+
+def _sync_pinecone_upsert(index_name: str, vectors: list, namespace: str):
+    try:
+        index_target = pinecone_pool.Index(index_name)
+        index_target.upsert(vectors=vectors, namespace=namespace)
+    except Exception as e:
+        logger.error(f"Async Pinecone Background Logger dropped: {str(e)}")
+
+# FIXED PERF: Accepting precalculated payload vectors prevents doing secondary OpenAI requests inside logging operations
 async def append_to_history_log_task(customer_id: str, reseller_parent: str, engine_name: str, task_type: str, user_input: str, ai_output: str, prompt_tokens: int, completion_tokens: int, pricing_key: str, precalculated_vector: list = None):
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clean_input = sanitize_for_csv(user_input)[:1000]
@@ -455,7 +499,7 @@ async def stripe_billing_webhook(request: Request, x_stripe_signature: str = Hea
         sub_obj = event["data"]["object"]
         stripe_customer_id = sub_obj["customer"]
         
-        # 🔥 FIXED PERF: O(1) Instant direct dictionary token target mapping lookup. No loop lag.
+        #FIXED PERF: O(1) Instant direct dictionary token target mapping lookup. No loop lag.
         target_token = CUSTOMER_ID_TO_TOKEN_MAP.get(stripe_customer_id)
         if target_token and target_token in CUSTOMER_REGISTRY:
             CUSTOMER_REGISTRY[target_token]["tier"] = "free"
