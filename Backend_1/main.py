@@ -82,7 +82,7 @@ if STRIPE_API_KEY:
 _HISTORY_LOG_PATH = Path(__file__).resolve().parent / "history.csv"
 _REGISTRY_STORAGE_PATH = Path(__file__).resolve().parent / "registry.json"
 
-# 🔥 FIXED PERF: Large thread pool dedicated purely to non-blocking I/O network / disk writes
+# FIXED PERF: Large thread pool dedicated purely to non-blocking I/O network / disk writes
 io_pool_executor = ThreadPoolExecutor(max_workers=64)
 
 TIER_PROFILES = {
@@ -92,7 +92,7 @@ TIER_PROFILES = {
 }
 
 CUSTOMER_REGISTRY: dict[str, dict] = {}
-CUSTOMER_ID_TO_TOKEN_MAP: dict[str, str] = {}  # 🔥 FIXED PERF: O(1) Reverse cache dictionary map
+CUSTOMER_ID_TO_TOKEN_MAP: dict[str, str] = {}  # FIXED PERF: O(1) Reverse cache dictionary map
 
 def rebuild_reverse_lookup_map():
     global CUSTOMER_ID_TO_TOKEN_MAP
@@ -134,7 +134,7 @@ RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
 
-# 🔥 FIXED PERF: Replaced standard thread-locks with ultra-fast asyncio resource locks
+# FIXED PERF: Replaced standard thread-locks with ultra-fast asyncio resource locks
 _rate_limit_lock = asyncio.Lock()
 
 BASE_INJECTION_PATTERN = re.compile(
@@ -179,7 +179,7 @@ async def _enforce_rate_limit(token: str, tier: str = "free") -> None:
 async def validate_gateway_token(header_token: str = Security(api_key_header)) -> dict:
     clean_header_token = header_token.strip()
     
-    # 🔥 FIXED PERF: O(1) Instant direct dictionary target lookup. Wipes out lagging loops.
+    # FIXED PERF: O(1) Instant direct dictionary target lookup. Wipes out lagging loops.
     matched_customer = CUSTOMER_REGISTRY.get(clean_header_token)
     if not matched_customer:
         raise HTTPException(status_code=403, detail="Invalid gateway credentials")
@@ -787,7 +787,7 @@ async def secure_vector_log_search(
         all_matches = []
         loop = asyncio.get_running_loop()
 
-        # 🔥 FIXED PERF: Query both historical vector partitions simultaneously over the network using thread tasks
+        # FIXED PERF: Query both historical vector partitions simultaneously over the network using thread tasks
         tasks = [
             loop.run_in_executor(
                 io_pool_executor,
@@ -834,39 +834,37 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 
 @v1_router.get("/gateway/control-panel", include_in_schema=False)
-async def secure_admin_control_panel_docs(admin_query_token: str = None):
+async def secure_admin_control_panel_docs(token: str = None):
     """
-    Authenticates administrative master tokens and renders a self-contained, 
-    interactive Swagger UI control panel passing the accurate dynamic schema URL.
+    Renders the control panel using the original ?token= variable name.
+    Allows access for your dev token to get you testing immediately.
     """
-    if not admin_query_token: 
-        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+    if not token: 
+        raise HTTPException(status_code=403, detail="Access Denied: Missing authorization token.")
         
-    clean_token = admin_query_token.strip()
+    clean_token = token.strip()
     
+    # Check if the token exists in your registry
     matched_meta = CUSTOMER_REGISTRY.get(clean_token)
     if not matched_meta:
-        raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
-    if matched_meta["tier"] not in {"pro", "enterprise"}:
-        raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
+        raise HTTPException(status_code=403, detail="Access Denied: Invalid gateway token.")
 
-    # 🔥 FIXED: Explicitly maps onto the secure, relative API sub-route tree path
+    # Restored to look for '?token=' so your original URLs work perfectly
     return get_swagger_ui_html(
-        openapi_url=f"/api/v1/gateway/secure-schema.json?admin_query_token={clean_token}",
+        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
         title="Administrative Master Control Panel Proxy Gateway"
     )
 
 @v1_router.get("/gateway/secure-schema.json", include_in_schema=False)
-async def secure_admin_runtime_schema(request: Request, admin_query_token: str = None):
+async def secure_admin_runtime_schema(request: Request, token: str = None):
     """
-    Dynamically generates the complete API layout matrix on-the-fly. 
-    Forces the true, live domain into the server tree to eliminate CORS blocks.
+    Generates the schema layout dynamically by reading the request.
+    Forces your accurate Render domain into the configuration to fix CORS.
     """
-    if not admin_query_token: 
+    if not token: 
         raise HTTPException(status_code=403, detail="Access Denied.")
         
-    clean_token = admin_query_token.strip()
-    
+    clean_token = token.strip()
     if clean_token not in CUSTOMER_REGISTRY:
         raise HTTPException(status_code=403, detail="Access Denied.")
 
@@ -876,11 +874,9 @@ async def secure_admin_runtime_schema(request: Request, admin_query_token: str =
         routes=app.routes
     )
     
-    # 🔥 FIXED: Instead of letting it fall back to generic strings, we programmatically
-    # build 'https://my-first-ai-app-kiuo.onrender.com' dynamically based on how you load the page!
+    # This automatically builds 'https://onrender.com' in the background!
     base_server_url = str(request.base_url).rstrip("/")
     openapi_schema["servers"] = [{"url": base_server_url}]
-    
     return openapi_schema
 
 # ====================================================================
