@@ -747,21 +747,30 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
                 logger.error("Agent Blocked: Missing TAVILY_API_KEY inside environment configuration variables.")
                 laws_context = "No specific statutory text matches found locally, and web extraction agent is inactive."
             else:
+# ====================================================================
+# 🟢 DEEP ENTITY EXTRACTION AGENT PATCH INSIDE /visa/advise
+# ====================================================================
                 try:
-                    # Execute a targeted search filtering for official and high-authority immigration rules
                     tavily_client = TavilyClient(api_key=tavily_key)
-                    agent_query = f"official digital nomad temporary resident visa requirements income criteria {payload.destination_country} for {payload.current_citizenship} citizens site:gov"
+                    agent_query = f"official digital nomad temporary resident visa requirements income criteria {payload.destination_country} for {payload.current_citizenship} citizens minimum financial solvency"
                     
+                    # Fix active: Switches to advanced search depth and extracts the core textual elements cleanly
                     search_results = await asyncio.to_thread(
                         tavily_client.search,
                         query=agent_query,
                         search_depth="advanced",
                         max_results=3,
-                        include_raw_content=False
+                        include_raw_content=False,
+                        include_answer=True # Instructs the agent pool to extract verified answers from web data
                     )
                     
+                    # Gather both the aggregated answer summary and the individual context fragments
+                    if search_results.get("answer"):
+                        context_snippets.append(f"Summary Context [Live Agent Search Overview]: {search_results['answer']}")
+                        
                     for res in search_results.get("results", []):
-                        context_snippets.append(f"Source [Live Stealth Web Agent - {res.get('url')}]: {res.get('snippet', '')}")
+                        if res.get('snippet'):
+                            context_snippets.append(f"Source [Live Stealth Web Agent - {res.get('url')}]: {res.get('snippet', '')}")
                     
                     laws_context = "\n\n".join(context_snippets)
                     logger.info(f"Stealth Agent successfully extracted {len(context_snippets)} live context nodes from web queries.")
