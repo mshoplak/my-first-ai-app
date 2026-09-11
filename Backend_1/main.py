@@ -710,14 +710,34 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
         else:
             raise HTTPException(status_code=500, detail="Failed to compute text semantic vectors.")
 
+# ====================================================================
+# 🟢 BULLETPROOF METADATA ISOLATION ENGINE INSIDE /visa/advise
+# ====================================================================
         index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
-        raw_laws = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=3, include_metadata=True, namespace="global-immigration-statutes")
+        
+        # Clean and isolate the raw country search word input (e.g., "italy" or "mexico")
+        clean_country_query = payload.destination_country.strip().lower()
+        
+        # FIX ACTIVE: Enforces a strict text containment match filter.
+        # This completely walls off other countries and prevents semantic cross-contamination.
+        raw_laws = await asyncio.to_thread(
+            index_target.query, 
+            vector=query_vector, 
+            top_k=3, 
+            include_metadata=True, 
+            namespace="global-immigration-statutes",
+            filter={"document_id": {"$in": [
+                f"{clean_country_query}_immigration_laws_and_visa_criteria",
+                f"mexican_immigration_laws_and_visa_criteria" if clean_country_query == "mexico" else f"{clean_country_query}_laws"
+            ]}}
+        )
         
         context_snippets = []
         for match in raw_laws.get("matches", []):
             if match.get("score", 0) >= 0.15:
                 meta = match.get("metadata", {})
                 context_snippets.append(f"Source [{meta.get('document_id', 'Local Database')}]: {meta.get('text_extract', '')}")
+
 
         # ANTIBLOCK AGENTIC TRIGGER: If local Pinecone returns 0 records, activate the live stealth agent
         if not context_snippets:
