@@ -588,7 +588,7 @@ async def optimized_translation(payload: TranslationRequest, background_tasks: B
         raise HTTPException(status_code=402, detail="Premium Subsystem Language pairing requirements require Pro or Enterprise plans.")
 
 # ====================================================================
-# 🟢 CORRECT THE PARSING ENGINE INSIDE @v1_router.post("/translate")
+# CORRECT THE PARSING ENGINE INSIDE @v1_router.post("/translate")
 # ====================================================================
     try:
         async with asyncio.timeout(25.0):
@@ -711,7 +711,7 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             raise HTTPException(status_code=500, detail="Failed to compute text semantic vectors.")
 
 # ====================================================================
-# 🟢 BULLETPROOF METADATA ISOLATION ENGINE INSIDE /visa/advise
+# BULLETPROOF METADATA ISOLATION ENGINE INSIDE /visa/advise
 # ====================================================================
         index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
         
@@ -748,7 +748,7 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
                 laws_context = "No specific statutory text matches found locally, and web extraction agent is inactive."
             else:
 # ====================================================================
-# 🟢 DEEP ENTITY EXTRACTION AGENT PATCH INSIDE /visa/advise
+# DEEP ENTITY EXTRACTION AGENT PATCH INSIDE /visa/advise
 # ====================================================================
                 try:
                     tavily_client = TavilyClient(api_key=tavily_key)
@@ -791,7 +791,8 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
             
         # FIX ACTIVE: Extract index 0 from the content blocks array list before formatting text
         if response and response.content and len(response.content) > 0:
-            resolved_advice = response.content[0].text.strip()
+            # Use standard attribute or item access safely
+            resolved_advice = getattr(response.content[0], "text", "").strip()
         else:
             resolved_advice = "Error: No legal advisory payload could be generated."
 
@@ -801,10 +802,10 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
         
         rates = MODEL_PRICING["anthropic-sonnet"]
         cost = ((p_tok / 1000000.0) * rates["input"]) + ((c_tok / 1000000.0) * rates["output"])
-        for token, meta in CUSTOMER_REGISTRY.items():
-            if meta["customer_id"] == client_auth["customer_id"]:
-                CUSTOMER_REGISTRY[token]["current_month_spend"] = round(current_spend + cost, 6)
-                break
+        secure_token_key = client_auth.get("gateway_secure_token_key")
+        if secure_token_key and secure_token_key in CUSTOMER_REGISTRY:
+            CUSTOMER_REGISTRY[secure_token_key]["current_month_spend"] = round(current_spend + cost, 6)
+
                 
         background_tasks.add_task(append_to_history_log, client_auth["customer_id"], client_auth["reseller_parent"], f"Anthropic ({ANTHROPIC_MODEL_NAME})", f"Visa Advisor ({payload.destination_country})", payload.query, resolved_advice, p_tok, c_tok, "anthropic-sonnet")
         return {"resolved_by": "Expat Legal Advisory Core (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
@@ -886,7 +887,7 @@ async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict 
         raise HTTPException(status_code=500, detail="Log retrieval service unavailable")
 
 # ====================================================================
-# 🟢 HARDENED SECURE ADMIN DASHBOARD ENGINE (CLEAN & COMPLETE)
+# HARDENED SECURE ADMIN DASHBOARD ENGINE (CLEAN & COMPLETE)
 # ====================================================================
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -945,7 +946,7 @@ async def secure_admin_runtime_schema(token: str = None):
         routes=app.routes
     )
     
-    # 🟢 FIX ACTIVE: Put your full application subdomain here
+    # FIX ACTIVE: Put your full application subdomain here
     openapi_schema["servers"] = [{"url": "https://my-first-ai-app-kiuo.onrender.com"}]
 
     
