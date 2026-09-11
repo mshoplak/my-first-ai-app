@@ -679,6 +679,11 @@ async def optimized_claude_chat(payload: ChatRequest, background_tasks: Backgrou
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Chat service unavailable")
 
+# ====================================================================
+# UPGRADED AGENTIC VISA ADVISORY CORE WITH ANTI-BLOCK WEB FALLBACK
+# ====================================================================
+from tavily import TavilyClient
+
 @v1_router.post("/visa/advise", tags=["Expat Legal Core"])
 async def generate_visa_legal_advice(payload: VisaConsultationRequest, background_tasks: BackgroundTasks, client_auth: dict = Depends(validate_gateway_token)):
     if client_auth["tier"] == "free":
@@ -694,38 +699,69 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
 
     try:
         search_prompt = f"Visa options for {payload.current_citizenship} citizen moving to {payload.destination_country}. Income: ${payload.monthly_income_usd}/mo. Context: {payload.query}"
-        async with asyncio.timeout(25.0):
+        
+        # 1. Primary Check: Query your high-speed Pinecone database index
+        async with asyncio.timeout(15.0):
             embedding_response = await openai_pool.embeddings.create(input=[search_prompt], model="text-embedding-3-large", dimensions=2048)
             
-            # FIX ACTIVE: Safely extract index 0 from the data array list layout before reading .embedding
-            if embedding_response and embedding_response.data and len(embedding_response.data) > 0:
-                query_vector = embedding_response.data[0].embedding
+        if embedding_response and embedding_response.data and len(embedding_response.data) > 0:
+            query_vector = embedding_response.data.embedding
+        else:
+            raise HTTPException(status_code=500, detail="Failed to compute text semantic vectors.")
+
+        index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
+        raw_laws = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=3, include_metadata=True, namespace="global-immigration-statutes")
+        
+        context_snippets = []
+        for match in raw_laws.get("matches", []):
+            if match.get("score", 0) >= 0.15:
+                meta = match.get("metadata", {})
+                context_snippets.append(f"Source [{meta.get('document_id', 'Local Database')}]: {meta.get('text_extract', '')}")
+
+        # ANTIBLOCK AGENTIC TRIGGER: If local Pinecone returns 0 records, activate the live stealth agent
+        if not context_snippets:
+            logger.info(f"Database lookup blank for {payload.destination_country}. Launching Stealth Web Agent...")
+            tavily_key = os.getenv("TAVILY_API_KEY")
+            if not tavily_key:
+                logger.error("Agent Blocked: Missing TAVILY_API_KEY inside environment configuration variables.")
+                laws_context = "No specific statutory text matches found locally, and web extraction agent is inactive."
             else:
-                raise HTTPException(status_code=500, detail="Failed to compute text semantic vectors.")
+                try:
+                    # Execute a targeted search filtering for official and high-authority immigration rules
+                    tavily_client = TavilyClient(api_key=tavily_key)
+                    agent_query = f"official official digital nomad temporary resident visa requirements income criteria {payload.destination_country} for {payload.current_citizenship} citizens site:gov"
+                    
+                    # Run the proxy call wrapped in an async thread pool executor
+                    search_results = await asyncio.to_thread(
+                        tavily_client.search,
+                        query=agent_query,
+                        search_depth="advanced",
+                        max_results=3,
+                        include_raw_content=False
+                    )
+                    
+                    for res in search_results.get("results", []):
+                        context_snippets.append(f"Source [Live Stealth Web Agent - {res.get('url')}]: {res.get('snippet', '')}")
+                    
+                    laws_context = "\n\n".join(context_snippets)
+                    logger.info(f"Stealth Agent successfully extracted {len(context_snippets)} live context nodes from web queries.")
+                except Exception as agent_err:
+                    logger.warning(f"Stealth Agent fallback loop dropped: {str(agent_err)}")
+                    laws_context = "No specific statutory text matches found."
+        else:
+            laws_context = "\n\n".join(context_snippets)
 
-            index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
-            raw_laws = await asyncio.to_thread(index_target.query, vector=query_vector, top_k=3, include_metadata=True, namespace="global-immigration-statutes")
-            context_snippets = []
-            for match in raw_laws.get("matches", []):
-                if match.get("score", 0) >= 0.15:
-                    meta = match.get("metadata", {})
-                    context_snippets.append(f"Source [{meta.get('document_id', 'Immigration law')}]: {meta.get('text_extract', '')}")
-            laws_context = "\n\n".join(context_snippets) if context_snippets else "No specific statutory text matches found."
+        # 2. Proceed to analysis phase via Claude 3.5 Sonnet
+        system_instruction = ("You are an elite international immigration attorney specializing in digital nomad visas.\nAnalyze the verified regulatory context files provided below and give precise, structured advice.\nAlways include a mandatory section at the very top titled 'REGULATORY LEGAL DISCLAIMER' explaining this does not constitute formal legal representation.")
+        user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
 
-            system_instruction = ("You are an elite international immigration attorney specializing in digital nomad visas.\nAnalyze the verified regulatory context files provided below and give precise, structured advice.\nAlways include a mandatory section at the very top titled 'REGULATORY LEGAL DISCLAIMER' explaining this does not constitute formal legal representation.")
-            user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
-
+        async with asyncio.timeout(20.0):
             response = await anthropic_pool.messages.create(
-                model=ANTHROPIC_MODEL_NAME, 
-                max_tokens=2048, 
-                system=system_instruction, 
-                messages=[{"role": "user", "content": user_content}]
+                model=ANTHROPIC_MODEL_NAME, max_tokens=2048, system=system_instruction, messages=[{"role": "user", "content": user_content}]
             )
-
             
-        # FIX ACTIVE: Safely extract text from the legal advisory response block array
         if response and response.content and len(response.content) > 0:
-            raw_text = getattr(response.content[0], 'text', "") or ""
+            raw_text = getattr(response.content, 'text', "") or ""
             resolved_advice = raw_text.strip()
         else:
             resolved_advice = "Error: No legal advisory payload could be generated."
@@ -741,12 +777,13 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
                 break
                 
         background_tasks.add_task(append_to_history_log, client_auth["customer_id"], client_auth["reseller_parent"], f"Anthropic ({ANTHROPIC_MODEL_NAME})", f"Visa Advisor ({payload.destination_country})", payload.query, resolved_advice, p_tok, c_tok, "anthropic-sonnet")
-        return {"resolved_by": "Expat Legal Advisory Core (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
+        return {"resolved_by": "Expat Legal Advisory Agent (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Upstream processing timed out at the route boundary.")
     except Exception as err:
         logger.error(f"Visa Advisor Routing Engine Malfunction: {str(err)}")
         raise HTTPException(status_code=500, detail="Immigration legal advisory engine is temporarily offline.")
+
 
 @v1_router.post("/logs/search", tags=["Enterprise Log Retrieval"])
 async def secure_vector_log_search(payload: LogSearchRequest, client_auth: dict = Depends(validate_gateway_token)):
