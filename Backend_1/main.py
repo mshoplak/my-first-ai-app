@@ -649,13 +649,13 @@ async def optimized_claude_chat(
         raise HTTPException(status_code=500, detail="Chat service unavailable")
 @v1_router.post("/visa/advise", tags=["Expat Legal Core"])
 async def generate_visa_legal_advice(
-    payload: VisaConsultationRequest, 
-    background_tasks: BackgroundTasks, 
+    payload: VisaConsultationRequest,
+    background_tasks: BackgroundTasks,
     client_auth: dict = Depends(validate_gateway_token)
 ):
     if client_auth["tier"] == "free":
         raise HTTPException(status_code=402, detail="Premium Subsystem: The Visa Advisory Engine requires an active Pro or Enterprise plan.")
-        
+
     verify_engine_pool(openai_pool, "OpenAI")
     verify_engine_pool(anthropic_pool, "Anthropic")
     verify_engine_pool(pinecone_pool, "Pinecone")
@@ -668,11 +668,11 @@ async def generate_visa_legal_advice(
     try:
         search_prompt = f"Visa options for {payload.current_citizenship} citizen moving to {payload.destination_country}. Income: ${payload.monthly_income_usd}/mo. Context: {payload.query}"
 
-        async with asyncio.timeout(10.0):
+        async with asyncio.timeout(8.0):
             embedding_response = await openai_pool.embeddings.create(
                 input=[search_prompt], model="text-embedding-3-large", dimensions=2048
             )
-        
+
         if embedding_response and embedding_response.data and len(embedding_response.data) > 0:
             query_vector = embedding_response.data[0].embedding
         else:
@@ -680,7 +680,7 @@ async def generate_visa_legal_advice(
 
         index_target = pinecone_pool.Index(PINECONE_INDEX_NAME)
         clean_country_query = payload.destination_country.strip().lower()
-        
+
         target_docs = [f"{clean_country_query}_immigration_laws_and_visa_criteria"]
         if clean_country_query == "mexico":
             target_docs.append("mexican_immigration_laws_and_visa_criteria")
@@ -714,12 +714,16 @@ async def generate_visa_legal_advice(
                     from tavily import TavilyClient
                     tavily_client = TavilyClient(api_key=tavily_key)
                     agent_query = f"official digital nomad temporary resident visa requirements income criteria {payload.destination_country} for {payload.current_citizenship} citizens minimum financial solvency"
-                    
-                    search_results = await loop.run_in_executor(
-                        io_pool_executor,
-                        lambda: tavily_client.search(
-                            query=agent_query, search_depth="advanced", max_results=3, include_raw_content=False, include_answer=True
-                        )
+
+                    search_results = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            io_pool_executor,
+                            lambda: tavily_client.search(
+                                query=agent_query, search_depth="basic",
+                                max_results=3, include_raw_content=False,
+                                include_answer=True
+                            )
+                        ), timeout=8.0
                     )
 
                     if search_results.get("answer"):
@@ -741,7 +745,7 @@ async def generate_visa_legal_advice(
         )
         user_content = f"CUSTOMER PROFILE:\nPassport: {payload.current_citizenship}\nTarget: {payload.destination_country}\nIncome: ${payload.monthly_income_usd:.2f}/mo\n\nREFERENCE DATA:\n{laws_context}\n\nQUERY:\n{payload.query}"
 
-        async with asyncio.timeout(20.0):
+        async with asyncio.timeout(15.0):
             response = await anthropic_pool.messages.create(
                 model=ANTHROPIC_MODEL_NAME, max_tokens=2048,
                 system=system_instruction, messages=[{"role": "user", "content": user_content}]
@@ -754,7 +758,7 @@ async def generate_visa_legal_advice(
 
         usage = response.usage
         p_tok, c_tok = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
-        
+
         cost = ((p_tok / 1000000.0) * MODEL_PRICING["anthropic-sonnet"]["input"]) + ((c_tok / 1000000.0) * MODEL_PRICING["anthropic-sonnet"]["output"])
         secure_token_key = client_auth["gateway_secure_token_key"]
         CUSTOMER_REGISTRY[secure_token_key]["current_month_spend"] = round(current_spend + cost, 6)
@@ -766,7 +770,7 @@ async def generate_visa_legal_advice(
             "legal_context_matches_found": len(context_snippets),
             "advice_payload": resolved_advice
         }
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, TimeoutError):
         raise HTTPException(status_code=504, detail="Upstream processing timed out at the route boundary.")
     except Exception as err:
         logger.error(f"Visa Advisor Routing Engine Malfunction: {str(err)}")
