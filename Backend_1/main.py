@@ -704,8 +704,9 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
         async with asyncio.timeout(15.0):
             embedding_response = await openai_pool.embeddings.create(input=[search_prompt], model="text-embedding-3-large", dimensions=2048)
             
+        # FIX ACTIVE: Extract index 0 from the data array list layout
         if embedding_response and embedding_response.data and len(embedding_response.data) > 0:
-            query_vector = embedding_response.data.embedding
+            query_vector = embedding_response.data[0].embedding
         else:
             raise HTTPException(status_code=500, detail="Failed to compute text semantic vectors.")
 
@@ -729,9 +730,8 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
                 try:
                     # Execute a targeted search filtering for official and high-authority immigration rules
                     tavily_client = TavilyClient(api_key=tavily_key)
-                    agent_query = f"official official digital nomad temporary resident visa requirements income criteria {payload.destination_country} for {payload.current_citizenship} citizens site:gov"
+                    agent_query = f"official digital nomad temporary resident visa requirements income criteria {payload.destination_country} for {payload.current_citizenship} citizens site:gov"
                     
-                    # Run the proxy call wrapped in an async thread pool executor
                     search_results = await asyncio.to_thread(
                         tavily_client.search,
                         query=agent_query,
@@ -777,12 +777,13 @@ async def generate_visa_legal_advice(payload: VisaConsultationRequest, backgroun
                 break
                 
         background_tasks.add_task(append_to_history_log, client_auth["customer_id"], client_auth["reseller_parent"], f"Anthropic ({ANTHROPIC_MODEL_NAME})", f"Visa Advisor ({payload.destination_country})", payload.query, resolved_advice, p_tok, c_tok, "anthropic-sonnet")
-        return {"resolved_by": "Expat Legal Advisory Agent (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
+        return {"resolved_by": "Expat Legal Advisory Core (Claude 3.5 Sonnet)", "account_tier": client_auth["tier"], "legal_context_matches_found": len(context_snippets), "advice_payload": resolved_advice}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Upstream processing timed out at the route boundary.")
     except Exception as err:
         logger.error(f"Visa Advisor Routing Engine Malfunction: {str(err)}")
         raise HTTPException(status_code=500, detail="Immigration legal advisory engine is temporarily offline.")
+
 
 
 @v1_router.post("/logs/search", tags=["Enterprise Log Retrieval"])
