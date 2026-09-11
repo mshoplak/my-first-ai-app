@@ -1209,11 +1209,10 @@ const ui = SwaggerUIBundle({{
     docExpansion: 'list',
     filter: true,
     syntaxHighlight: {{ activated: true, theme: 'monokai' }},
-    presets: [
+        presets: [
         SwaggerUIBundle.presets.apis,
         SwaggerUIBundle.SwaggerUIStandalonePreset
-    ],
-    layout: 'StandaloneLayout'
+    ]
 }})
 </script>
 </body>

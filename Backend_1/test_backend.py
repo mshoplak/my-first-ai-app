@@ -499,6 +499,12 @@ class TestAdminPanelDarkTheme:
         html = self._get_panel_html()
         assert "filter: true" in html
 
+    def test_html_does_not_use_standalone_layout(self):
+        """StandaloneLayout requires a separate JS file we don't load."""
+        html = self._get_panel_html()
+        assert "'StandaloneLayout'" not in html
+        assert '"StandaloneLayout"' not in html
+
     def test_html_is_valid_structure(self):
         """Basic structural check: DOCTYPE, html, head, body tags present."""
         html = self._get_panel_html()
