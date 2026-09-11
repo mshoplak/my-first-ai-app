@@ -834,34 +834,53 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 
 @v1_router.get("/gateway/control-panel", include_in_schema=False)
-async def secure_admin_control_panel_docs(token: str = None):
-    if not token: raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
-    clean_token = token.strip()
+async def secure_admin_control_panel_docs(admin_query_token: str = None):
+    """
+    Authenticates administrative master tokens and renders a self-contained, 
+    interactive Swagger UI control panel passing the accurate dynamic schema URL.
+    """
+    if not admin_query_token: 
+        raise HTTPException(status_code=403, detail="Access Denied: Missing administrative token.")
+        
+    clean_token = admin_query_token.strip()
     
-    # FIXED PERF & SYNTAX: Switched to instant O(1) hash map validation lookup
     matched_meta = CUSTOMER_REGISTRY.get(clean_token)
     if not matched_meta:
         raise HTTPException(status_code=403, detail="Access Denied: Invalid administrative token.")
     if matched_meta["tier"] not in {"pro", "enterprise"}:
         raise HTTPException(status_code=403, detail="Access Denied: Insufficient plan privileges.")
 
+    # 🔥 FIXED: Explicitly maps onto the secure, relative API sub-route tree path
     return get_swagger_ui_html(
-        openapi_url=f"/api/v1/gateway/secure-schema.json?token={clean_token}",
+        openapi_url=f"/api/v1/gateway/secure-schema.json?admin_query_token={clean_token}",
         title="Administrative Master Control Panel Proxy Gateway"
     )
 
 @v1_router.get("/gateway/secure-schema.json", include_in_schema=False)
-async def secure_admin_runtime_schema(token: str = None):
-    if not token: raise HTTPException(status_code=403, detail="Access Denied.")
-    clean_token = token.strip()
+async def secure_admin_runtime_schema(request: Request, admin_query_token: str = None):
+    """
+    Dynamically generates the complete API layout matrix on-the-fly. 
+    Forces the true, live domain into the server tree to eliminate CORS blocks.
+    """
+    if not admin_query_token: 
+        raise HTTPException(status_code=403, detail="Access Denied.")
+        
+    clean_token = admin_query_token.strip()
     
     if clean_token not in CUSTOMER_REGISTRY:
         raise HTTPException(status_code=403, detail="Access Denied.")
 
     openapi_schema = get_openapi(
-        title="Hardened Enterprise API Gateway Platform", version="4.5.0", routes=app.routes
+        title="Hardened Enterprise API Gateway Platform", 
+        version="4.5.0", 
+        routes=app.routes
     )
-    openapi_schema["servers"] = [{"url": "https://onrender.com"}]
+    
+    # 🔥 FIXED: Instead of letting it fall back to generic strings, we programmatically
+    # build 'https://my-first-ai-app-kiuo.onrender.com' dynamically based on how you load the page!
+    base_server_url = str(request.base_url).rstrip("/")
+    openapi_schema["servers"] = [{"url": base_server_url}]
+    
     return openapi_schema
 
 # ====================================================================
